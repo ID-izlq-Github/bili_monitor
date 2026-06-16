@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 from bili_monitor.api.client import BiliAPIClient
@@ -51,10 +51,6 @@ class Scheduler:
         for row in rows:
             if not row.active:
                 continue
-            next_run = datetime.now()
-            if row.last_record:
-                last = datetime.fromisoformat(row.last_record)
-                next_run = max(last + timedelta(seconds=row.interval), next_run)
             self._tasks[row.bvid] = TaskInfo(
                 bvid=row.bvid,
                 name=row.name,
@@ -62,7 +58,7 @@ class Scheduler:
                 uploader=row.uploader,
                 video_id=row.video_id,
                 interval=row.interval,
-                next_run=next_run,
+                next_run=datetime.now(),
             )
         if self._tasks:
             logger.info("已加载 %d 个活跃监控任务", len(self._tasks))
@@ -127,7 +123,10 @@ class Scheduler:
                 logger.info("[同步] %s 已从 DB 删除", bvid)
             elif db_row.active != task.active:
                 task.active = db_row.active
-                if not task.active:
+                if task.active:
+                    task.next_run = datetime.now()
+                    logger.info("[同步] %s 已激活", bvid)
+                else:
                     logger.info("[同步] %s 已停用", bvid)
             else:
                 changed = False
