@@ -368,6 +368,21 @@ def _chart_conversion(ax, binned, rows, timestamps, title):
     ax2.yaxis.label.set_color(_COLORS["danmaku"])
     ax2.tick_params(axis="y", colors=_COLORS["danmaku"])
 
+    for curve_x, curve_y, color, axis, y_off in [
+        (ts, like_rate, _COLORS["likes"], ax, 6),
+        (ts, coin_rate, _COLORS["coins"], ax, 2),
+        (ts, fav_rate, _COLORS["favorites"], ax, -2),
+        (ts, coin_like, _COLORS["danmaku"], ax2, 2),
+        (timestamps, cum_like_curve, _COLORS["likes"], ax, -6),
+        (timestamps, cum_coin_curve, _COLORS["coins"], ax, -10),
+        (timestamps, cum_fav_curve, _COLORS["favorites"], ax, -14),
+        (timestamps, cum_cl_curve, _COLORS["danmaku"], ax2, -2),
+    ]:
+        if curve_x and curve_y:
+            axis.annotate(f"{curve_y[-1]:.3f}", xy=(curve_x[-1], curve_y[-1]),
+                          xytext=(4, y_off), textcoords="offset points",
+                          fontsize=6, color=color, va="center", alpha=0.9)
+
     l1, lb1 = ax.get_legend_handles_labels()
     l2, lb2 = ax2.get_legend_handles_labels()
     ax.legend(l1 + l2, lb1 + lb2, loc="upper left",
