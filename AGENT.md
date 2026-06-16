@@ -159,9 +159,16 @@ CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
 - 文件名自动生成 `{bvid}_{timestamp}.csv/json`
 
 ### `viz/plots.py` — 可视化
-- matplotlib + seaborn，保存到 `output/image/`
-- 趋势图：单视频多指标随时间变化（折线图）
-- 比值图：指标间比值变化（如点赞/播放比）
+- matplotlib (Agg backend)，保存到 `output/image/`
+- 4 种图表类型：
+  - `trend` — 趋势图，量级差 >10x 时自动 `twinx()` 双 Y 轴
+  - `subplot` — 各指标独立 subplot，彻底解决量级差距问题
+  - `delta` — 相邻记录绝对增量图，带零线参考
+  - `ratio` — 比值图，自动选基准指标（优先 views）
+- 输出路径：`{image_dir}/{bvid}-{name}/{last_ts}/{type}.png`
+  - `last_ts` 取最后一条数据时间，同批次自动归组
+- 美化：Tableau 10 色板、圆点标记、标题含记录数、页脚生成时间戳
+- CLI 支持 `--all` 一次生成所有类型
 
 ### `daemon/daemon.py` — 守护进程
 - Linux：`os.fork()` + PID 文件
@@ -189,6 +196,9 @@ $ python -m bili_monitor import data.csv --bvid BV1xx
 
 # 可视化
 $ python -m bili_monitor viz myvideo --metrics views,likes --type trend
+$ python -m bili_monitor viz myvideo --type subplot     # 独立Y轴
+$ python -m bili_monitor viz myvideo --type delta        # 增量图
+$ python -m bili_monitor viz myvideo --all               # 全类型
 
 # 启用/停用
 $ python -m bili_monitor start myvideo
@@ -219,7 +229,7 @@ $ python -m bili_monitor daemon status
 | CLI 框架 | typer | 已有、类型安全、自动 --help |
 | 进程 | `python -m bili_monitor` | 用户要求，src layout 原生支持 |
 | 登录 | 不支持 | 用户确认，公开 API 即可 |
-| 可视化 | 保存文件到 output/image/ | 用户确认，不弹窗 |
+| 可视化 | 保存文件到 output/image/ | 4 类型 (trend/subplot/delta/ratio)，Agg 后端 |
 | 守护进程 | fork + PID file（首选 Linux） | 简单可靠 |
 | 配置变更通知 | SIGUSR1 | CLI 直接 kill 发信号，零 IPC 依赖 |
 

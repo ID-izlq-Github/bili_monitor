@@ -27,7 +27,7 @@
 | **数据导出** | CSV / JSON 一键导出（含 bvid 列，便于导入） |
 | **数据导入** | CSV / JSON 一键导入，自动去重，支持覆盖和预览 |
 | **发布基线** | 自动记录视频发布时间，7 天内新视频插入全 0 基线记录 |
-| **可视化** | matplotlib + seaborn 趋势图/比值图，自动保存 |
+| **可视化** | 4 种图表类型：趋势(自动双轴)、独立子图、增量、比值；`--all` 一次生成全套 |
 | **守护进程** | Linux 后台运行，PID 文件管理 + SIGUSR1 实时通知 |
 | **自动停启** | `create` 自动激活并启动 daemon；停用最后任务自动关 daemon |
 | **自动提醒** | 数据超 180 天或 DB 超 30MB 时提示清理 |
@@ -86,6 +86,9 @@ python -m bili_monitor import data.csv --bvid BV1GJ411x7h7
 
 # 生成可视化
 python -m bili_monitor viz rick --metrics views,likes,coins --type trend
+python -m bili_monitor viz rick --type subplot    # 独立Y轴
+python -m bili_monitor viz rick --type delta       # 增量图
+python -m bili_monitor viz rick --all              # 全部类型
 
 # 查看守护进程状态
 python -m bili_monitor daemon status
@@ -204,15 +207,23 @@ python -m bili_monitor import <文件路径> --bvid <BV号> [选项]
 ### `viz` — 可视化
 
 ```
-python -m bili_monitor viz <BV号> [选项]
+python -m bili_monitor viz <别名|BV号> [选项]
 ```
 
 | 参数 | 说明 | 默认 |
 |------|------|------|
 | `-m, --metrics` | 指标列表（逗号分隔） | views,likes,coins |
-| `-t, --type` | 图表类型：`trend` / `ratio` | trend |
+| `-t, --type` | 图表类型：`trend` / `subplot` / `delta` / `ratio` | trend |
+| `-a, --all` | 生成所有类型的图表 | 不设 |
 
-图片自动保存至 `output/image/` 目录。
+图表说明：
+- **trend** — 趋势折线图，量级差 >10x 时自动启用双 Y 轴
+- **subplot** — 每个指标独占一个子图，独立 Y 轴（解决量级差距问题）
+- **delta** — 相邻记录绝对增量，显示增长趋势
+- **ratio** — 各指标对基准指标（默认播放量）的比值
+
+输出路径：`output/image/{BV号}-{别名}/{最后记录时间}/{类型}.png`
+- 同批次数据自动归组到同一时间目录，重复生成直接覆盖
 
 ---
 
