@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +18,8 @@ from rich.progress import Progress
 
 from bili_monitor.config import Settings
 from bili_monitor.db.database import Database
+
+logger = logging.getLogger("bili_monitor.viz")
 
 
 # ── Color palette ──────────────────────────────────────────────
@@ -598,31 +601,31 @@ async def generate_report(
             progress.update(task, description=f"正在生成 {chart_name}...")
 
             fig, ax = plt.subplots(figsize=_FIGSIZE)
-        ts_range = f"{timestamps[0].strftime('%m-%d %H:%M')} ~ {timestamps[-1].strftime('%m-%d %H:%M')}  [{len(rows)}条记录]"
-        title = f"{name_label} · {chart_name}\n{ts_range}"
+            ts_range = f"{timestamps[0].strftime('%m-%d %H:%M')} ~ {timestamps[-1].strftime('%m-%d %H:%M')}  [{len(rows)}条记录]"
+            title = f"{name_label} · {chart_name}\n{ts_range}"
 
-        try:
-            if chart_name in ("05_观看留存率", "06_平均观看时长"):
-                func(ax, rows, deltas, duration, title)
-            elif chart_name == "03_互动转化效率":
-                func(ax, deltas, weights, title)
-            elif chart_name == "07_传播效率":
-                func(ax, rows, deltas, duration, title)
-            elif chart_name in ("01_播放与互动",):
-                func(ax, rows, timestamps, title)
-            else:
-                func(ax, deltas, title)
+            try:
+                if chart_name in ("05_观看留存率", "06_平均观看时长"):
+                    func(ax, rows, deltas, duration, title)
+                elif chart_name == "03_互动转化效率":
+                    func(ax, deltas, weights, title)
+                elif chart_name == "07_传播效率":
+                    func(ax, rows, deltas, duration, title)
+                elif chart_name in ("01_播放与互动",):
+                    func(ax, rows, timestamps, title)
+                else:
+                    func(ax, deltas, title)
 
-            _footer(fig)
-            fig.autofmt_xdate()
-            fig.tight_layout()
-            out_path = base_dir / f"{chart_name}.png"
-            fig.savefig(out_path, dpi=200, bbox_inches="tight")
-            generated.append(out_path)
-        except Exception as exc:
-            pass
-        finally:
-            plt.close(fig)
-            progress.advance(task)
+                _footer(fig)
+                fig.autofmt_xdate()
+                fig.tight_layout()
+                out_path = base_dir / f"{chart_name}.png"
+                fig.savefig(out_path, dpi=200, bbox_inches="tight")
+                generated.append(out_path)
+            except Exception as exc:
+                logger.warning("[%s] %s 生成失败: %s", bvid, chart_name, exc)
+            finally:
+                plt.close(fig)
+                progress.advance(task)
 
     return generated
