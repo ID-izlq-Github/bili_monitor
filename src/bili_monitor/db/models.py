@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS videos (
     active      INTEGER NOT NULL DEFAULT 0,
     pubdate     TEXT,
     duration    INTEGER,
-    tname       TEXT
+    tname       TEXT,
+    videos      INTEGER DEFAULT 1
 )
 """
 
@@ -23,6 +24,7 @@ BACKFILL_NAME = "UPDATE videos SET name = bvid WHERE name IS NULL"
 ADD_PUBDATE_COL = "ALTER TABLE videos ADD COLUMN pubdate TEXT"
 ADD_DURATION_COL = "ALTER TABLE videos ADD COLUMN duration INTEGER"
 ADD_TNAME_COL = "ALTER TABLE videos ADD COLUMN tname TEXT"
+ADD_VIDEOS_COL = "ALTER TABLE videos ADD COLUMN videos INTEGER DEFAULT 1"
 ADD_REPLY_COL = "ALTER TABLE records ADD COLUMN reply INTEGER"
 ADD_HIS_RANK_COL = "ALTER TABLE records ADD COLUMN his_rank INTEGER"
 
@@ -101,6 +103,7 @@ class TaskRow:
     pubdate: Optional[str] = None
     duration: Optional[int] = None
     tname: Optional[str] = None
+    videos: int = 1
 
 
 @dataclass

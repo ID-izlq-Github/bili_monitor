@@ -67,6 +67,7 @@ class VideoMeta:
     pubdate: Optional[int] = None
     duration: int = 0
     tname: str = ""
+    videos: int = 1
 
 
 _global_semaphore: asyncio.Semaphore | None = None
@@ -121,6 +122,7 @@ class BiliAPIClient:
             pubdate=info.get("pubdate"),
             duration=info.get("duration", 0),
             tname=info.get("tname", ""),
+            videos=info.get("videos", 1),
         )
 
     async def fetch_record_data(self, bvid: str) -> RecordData:

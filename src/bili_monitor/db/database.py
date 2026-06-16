@@ -15,6 +15,7 @@ from bili_monitor.db.models import (
     ADD_PUBDATE_COL,
     ADD_REPLY_COL,
     ADD_TNAME_COL,
+    ADD_VIDEOS_COL,
     BACKFILL_NAME,
     CHECK_SIZE_SQL,
     DELETE_OLD_RECORDS,
@@ -59,7 +60,7 @@ class Database:
         await self._execute(TASK_INTERVALS_TABLE)
         name_col_added = False
         for migration in (ADD_NAME_COL, ADD_PUBDATE_COL,
-                          ADD_DURATION_COL, ADD_TNAME_COL,
+                          ADD_DURATION_COL, ADD_TNAME_COL, ADD_VIDEOS_COL,
                           ADD_REPLY_COL, ADD_HIS_RANK_COL):
             try:
                 await self._execute(migration)
@@ -128,12 +129,13 @@ class Database:
         pubdate: Optional[str] = None,
         duration: Optional[int] = None,
         tname: Optional[str] = None,
+        videos: int = 1,
     ) -> int:
         await self._execute(
             "INSERT INTO videos (bvid, name, title, uploader, pubdate, "
-            "duration, tname, active) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
-            (bvid, name, title, uploader, pubdate, duration, tname),
+            "duration, tname, videos, active) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
+            (bvid, name, title, uploader, pubdate, duration, tname, videos),
         )
         await self._commit()
         row = await self._fetchone(
@@ -166,12 +168,13 @@ class Database:
         duration: Optional[int] = None,
         tname: Optional[str] = None,
         pubdate: Optional[str] = None,
+        videos: Optional[int] = None,
     ) -> None:
         sets = []
         params: list = []
         for key, val in [("title", title), ("uploader", uploader),
                           ("duration", duration), ("tname", tname),
-                          ("pubdate", pubdate)]:
+                          ("pubdate", pubdate), ("videos", videos)]:
             if val is not None:
                 sets.append(f"{key} = ?")
                 params.append(val)
@@ -209,7 +212,7 @@ class Database:
     async def get_all_tasks(self) -> list[TaskRow]:
         rows = await self._fetchall(
             "SELECT v.id, v.bvid, v.name, v.title, v.uploader, "
-            "v.active, v.pubdate, v.duration, v.tname, "
+            "v.active, v.pubdate, v.duration, v.tname, v.videos, "
             "COALESCE(i.interval, ?) AS interval, "
             "v.created_at, "
             "COUNT(r.id) AS record_count, "
@@ -236,6 +239,7 @@ class Database:
                 pubdate=row["pubdate"],
                 duration=row["duration"],
                 tname=row["tname"],
+                videos=row["videos"] or 1,
             )
             for row in rows
         ]

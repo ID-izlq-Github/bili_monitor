@@ -120,12 +120,13 @@ def _report_dir(cfg: Settings, bvid: str, name: str, rows) -> Path:
 _FIGSIZE = (14, 6)
 
 
-def _style_ax(ax, title: str, xlabel: str = "时间") -> None:
+def _style_ax(ax, title: str, xlabel: str = "时间", date_axis: bool = True) -> None:
     ax.set_title(title, fontsize=12, loc="left", pad=14, fontweight="bold")
     ax.set_xlabel(xlabel)
-    locator = mdates.AutoDateLocator()
-    ax.xaxis.set_major_locator(locator)
-    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+    if date_axis:
+        locator = mdates.AutoDateLocator()
+        ax.xaxis.set_major_locator(locator)
+        ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
     ax.tick_params(labelsize=9)
 
 
@@ -319,8 +320,8 @@ def _chart_conversion(ax, hourly, title):
 
     ax.set_ylabel("比值", fontsize=10)
     ax.legend(loc="upper left", framealpha=0.9, fontsize=9)
-    ax.axhline(y=0, color="#cccccc", linewidth=0.8, linestyle="--")
-    _style_ax(ax, title)
+    _style_ax(ax, title, date_axis=False)
+
     ax.set_xlabel("")
 
 
@@ -382,7 +383,7 @@ def _chart_vdr_from_rows(ax, rows, deltas, duration, title):
             bbox=dict(boxstyle="round,pad=0.3", facecolor="#f0f0f0",
                       edgecolor="#ddd", alpha=0.8))
 
-    _style_ax(ax, title)
+    _style_ax(ax, title, date_axis=False)
     ax.set_xlabel("")
 
 
@@ -575,6 +576,7 @@ async def generate_report(
     output: Optional[Path] = None,
     weights: Optional[dict] = None,
     duration: Optional[int] = None,
+    videos: int = 1,
 ) -> list[Path]:
     cfg = Settings.get_instance()
     rows = await db.get_records(video_id)
@@ -586,6 +588,7 @@ async def generate_report(
     timestamps = _ts(rows)
     deltas = _deltas(rows)
     hourly = _aggregate_hourly(deltas)
+    eff_duration = duration // max(videos, 1) if duration else None
 
     base_dir = output or _report_dir(cfg, bvid, name, rows)
 
@@ -612,13 +615,13 @@ async def generate_report(
 
             try:
                 if chart_name in ("05_观看留存率", "06_平均观看时长"):
-                    func(ax, rows, deltas, duration, title)
+                    func(ax, rows, deltas, eff_duration, title)
                 elif chart_name == "03_互动转化效率":
                     func(ax, hourly, weights, title)
                 elif chart_name in ("02_互动增量", "04_三连率"):
                     func(ax, hourly, title)
                 elif chart_name == "07_传播效率":
-                    func(ax, rows, deltas, duration, title)
+                    func(ax, rows, deltas, eff_duration, title)
                 elif chart_name in ("01_播放与互动",):
                     func(ax, rows, timestamps, title)
                 else:

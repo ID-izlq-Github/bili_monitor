@@ -107,6 +107,7 @@ async def _cmd_create(
             pubdate=pubdate_iso,
             duration=meta.duration or None,
             tname=meta.tname or None,
+            videos=meta.videos,
         )
         await db.save_interval(video_id, interval)
 
@@ -373,6 +374,7 @@ async def _cmd_update(
                 duration=meta.duration or None,
                 tname=meta.tname or None,
                 pubdate=pubdate_iso,
+                videos=meta.videos,
             )
         mgr = DaemonManager()
         mgr.reload()
@@ -460,6 +462,7 @@ async def _cmd_list() -> None:
         table.add_column("UP主")
         table.add_column("分区", no_wrap=False)
         table.add_column("时长")
+        table.add_column("分P")
         table.add_column("状态")
         table.add_column("间隔")
         table.add_column("记录数", justify="right")
@@ -471,9 +474,10 @@ async def _cmd_list() -> None:
             pub = t.pubdate or "[dim]—[/]"
             duration_str = _fmt_duration(t.duration) if t.duration else "[dim]—[/]"
             tname_str = t.tname or "[dim]—[/]"
+            videos_str = str(t.videos) + "P" if t.videos > 1 else "[dim]—[/]"
             table.add_row(
                 t.name, t.bvid, t.title[:40], t.uploader,
-                tname_str, duration_str,
+                tname_str, duration_str, videos_str,
                 status, f"{t.interval}s",
                 str(t.record_count), last, pub[:19] if t.pubdate else "[dim]—[/]",
             )
@@ -555,6 +559,7 @@ async def _cmd_viz(
             output=output,
             weights=w,
             duration=row["duration"],
+            videos=row["videos"],
         )
 
         if not paths:
