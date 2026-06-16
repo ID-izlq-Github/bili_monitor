@@ -543,8 +543,7 @@ def _chart_share_lag(ax, deltas, title):
 
     l1, lb1 = ax.get_legend_handles_labels()
     l2, lb2 = ax2.get_legend_handles_labels()
-    ax.legend(l1 + l2, lb1 + lb2, loc="upper left", framealpha=0.9, fontsize=9,
-              zorder=5)
+    ax.legend(l1 + l2, lb1 + lb2, loc="upper left", framealpha=0.9, fontsize=9)
     _style_ax(ax, title)
 
 
