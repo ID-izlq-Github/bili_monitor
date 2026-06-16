@@ -335,13 +335,6 @@ def _chart_vdr_from_rows(ax, rows, deltas, duration, title):
         _style_ax(ax, title)
         return
 
-    online_count = sum(1 for r in rows if r["online"] is not None)
-    if online_count < 5:
-        ax.text(0.5, 0.5, f"在线人数数据不足 (当前 {online_count} 条, 需要 ≥5 条)",
-                ha="center", va="center", fontsize=12, color="#999")
-        _style_ax(ax, title)
-        return
-
     vdr_vals, ts = [], []
     for i, d in enumerate(deltas):
         if d["Δviews"] <= 0:
@@ -349,6 +342,8 @@ def _chart_vdr_from_rows(ax, rows, deltas, duration, title):
         idx = d["i"]
         online_prev = rows[idx - 1]["online"] or 0
         online_curr = rows[idx]["online"] or 0
+        if online_prev <= 0 and online_curr <= 0:
+            continue
         expected = (online_prev + online_curr) / 2 * d["dt"] / duration
         if expected <= 0:
             continue
@@ -356,34 +351,38 @@ def _chart_vdr_from_rows(ax, rows, deltas, duration, title):
         vdr_vals.append(min(vdr, 10))
         ts.append(d["timestamp"])
 
-    if not vdr_vals:
-        ax.text(0.5, 0.5, "数据不足", ha="center", va="center",
-                fontsize=13, color="#999")
+    if len(vdr_vals) < 3:
+        ax.text(0.5, 0.5, "数据不足 (需要至少 3 个有效间隔)",
+                ha="center", va="center", fontsize=13, color="#999")
         _style_ax(ax, title)
         return
 
-    colors = ["#54A24B" if v >= 1 else "#E45756" for v in vdr_vals]
-    x = np.arange(len(vdr_vals))
-    bars = ax.bar(x, vdr_vals, color=colors, alpha=0.8, width=0.6,
-                  edgecolor="white", linewidth=0.5)
+    ax.plot(ts, vdr_vals, color="#4C78A8", linewidth=2,
+            marker="o", markersize=3.5, alpha=0.8, label="VDR", zorder=3)
+    ax.fill_between(ts, 1, vdr_vals,
+                     where=(np.array(vdr_vals) >= 1),
+                     color="#54A24B", alpha=0.15, interpolate=True)
+    ax.fill_between(ts, vdr_vals, 1,
+                     where=(np.array(vdr_vals) < 1),
+                     color="#E45756", alpha=0.15, interpolate=True)
+
     ax.axhline(y=1, color="#333333", linewidth=1.2, linestyle="--",
                alpha=0.7, label="基准 (VDR=1)")
-
-    ax.set_xticks(x)
-    ax.set_xticklabels([t.strftime("%m-%d %H:%M") for t in ts],
-                       rotation=30, ha="right", fontsize=7)
     ax.set_ylabel("VDR", fontsize=10)
+
+    avg_vdr = np.mean(vdr_vals)
+    ax.axhline(y=avg_vdr, color="#999999", linewidth=1,
+               linestyle=":", alpha=0.6, label=f"均值 {avg_vdr:.2f}")
+
     ax.legend(loc="upper left", framealpha=0.9, fontsize=9)
     ax.axhline(y=0, color="#cccccc", linewidth=0.8)
 
-    avg_vdr = np.mean(vdr_vals)
     ax.text(0.98, 0.95, f"均值 VDR={avg_vdr:.2f}",
             transform=ax.transAxes, ha="right", va="top",
             fontsize=9, color="#666",
             bbox=dict(boxstyle="round,pad=0.3", facecolor="#f0f0f0",
                       edgecolor="#ddd", alpha=0.8))
-
-    _style_ax(ax, title, date_axis=False)
+    _style_ax(ax, title)
     ax.set_xlabel("")
 
 
@@ -448,35 +447,32 @@ def _chart_scatter(ax, rows, deltas, duration, title):
     if not duration:
         ax.text(0.5, 0.5, "使用 `update xxx --refresh-meta`\n补全视频时长后即可生成",
                 ha="center", va="center", fontsize=12, color="#999")
-        _style_ax(ax, title)
+        _style_ax(ax, title, date_axis=False)
         return
 
-    online_count = sum(1 for r in rows if r["online"] is not None)
-    if online_count < 5:
-        ax.text(0.5, 0.5, f"在线人数数据不足 (当前 {online_count} 条, 需要 ≥5 条)",
-                ha="center", va="center", fontsize=12, color="#999")
-        _style_ax(ax, title)
-        return
-
-    xs, ys, sizes, colors, labels = [], [], [], [], []
+    valid_intervals = 0
+    xs, ys, sizes, colors = [], [], [], []
     for d in deltas:
         if d["Δviews"] < 0:
             continue
         idx = d["i"]
-        online_avg = ((rows[idx - 1]["online"] or 0) +
-                      (rows[idx]["online"] or 0)) / 2
+        online_prev = rows[idx - 1]["online"] or 0
+        online_curr = rows[idx]["online"] or 0
+        if online_prev <= 0 and online_curr <= 0:
+            continue
+        valid_intervals += 1
+        online_avg = (online_prev + online_curr) / 2
         x = online_avg / (2 * duration)
         y = d["Δviews"] / max(d["dt"], 1)
         xs.append(x)
         ys.append(y)
         sizes.append(max(abs(d.get("Δshares", 0)), 1))
         colors.append(d["timestamp"])
-        labels.append(d["timestamp"].strftime("%m-%d %H:%M"))
 
-    if len(xs) < 3:
-        ax.text(0.5, 0.5, "数据不足", ha="center", va="center",
-                fontsize=13, color="#999")
-        _style_ax(ax, title)
+    if valid_intervals < 3:
+        ax.text(0.5, 0.5, "在线数据不足 (需要≥3个有效间隔)\n新记录会自动采集 online 数据",
+                ha="center", va="center", fontsize=12, color="#999")
+        _style_ax(ax, title, date_axis=False)
         return
 
     sizes_norm = [max(s * 30 / max(sizes), 15) for s in sizes]
@@ -498,7 +494,7 @@ def _chart_scatter(ax, rows, deltas, duration, title):
     ax.set_xlabel("等效完播密度 (次/秒)", fontsize=10)
     ax.set_ylabel("实际播放增速 (次/秒)", fontsize=10)
     ax.legend(loc="upper left", framealpha=0.9, fontsize=9)
-    _style_ax(ax, title)
+    _style_ax(ax, title, date_axis=False)
 
 
 # ── Chart 8: 分享传播影响 ─────────────────────────────────────
