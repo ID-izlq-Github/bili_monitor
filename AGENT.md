@@ -7,19 +7,19 @@ Bilibili 视频数据监控 CLI 工具。多视频并发监控（序列化请求
 ## 架构概览
 
 ```
-┌─────────────┐  typer CLI 入口（含内置 --install-completion）
-│   cli.py    │
-└──────┬──────┘
+┌─────────────┐  typer CLI（11 子命令, 内置 --install-completion）
+│   cli.py    │  create / delete / start / stop / update / show
+└──────┬──────┘  list / panel / export / viz / daemon status
        │
        ▼
-┌──────────────┐  任务增删改查 + CommandQueue IPC
+┌──────────────┐  CommandQueue IPC + SIGUSR1
 │  scheduler   │◄──── asyncio.Semaphore(1) 序列化所有请求
-│  scheduler   │◄──── 每30s _check_external_changes() 同步DB变更
+│  scheduler   │◄──── _check_external_changes() 同步DB变更 / SIGUSR1 立即 reload
 └──────┬───────┘
        │
        ├──▶ api/client.py   ──▶ bilibili-api-python (HTTP)
-       ├──▶ db/database.py  ──▶ sqlite3 (stdlib)
-       ├──▶ ui/panel.py     ──▶ rich.Live 交互面板（独立线程）
+       ├──▶ db/database.py  ──▶ sqlite3 (WAL, 别名查询, 迁移)
+       ├──▶ ui/panel.py     ──▶ rich.Live (4Hz auto-refresh, 独立线程)
        ├──▶ export/         ──▶ csv/json
        └──▶ viz/            ──▶ matplotlib + seaborn → output/image/
 ```
@@ -100,14 +100,17 @@ CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
 
 ### `cli.py` — CLI 入口
 - typer command group，包含子命令
-- `start <bvid/url>`：添加监控任务
-- `update <bvid> [--interval]`：修改任务参数（同一 BV 重复 start 也可更新）
-- `stop <bvid/id>`：停止监控任务
+- `create <bvid> --name X [--interval N] [--inactive]`：注册新视频
+- `delete <bvid/name>`：彻底删除视频及所有记录
+- `start [bvid/name] [--all]`：启动 daemon / 激活任务
+- `stop [bvid/name] [--all]`：停用任务 / 关 daemon
+- `update <bvid/name> [--name X] [--interval N]`：修改别名或间隔
+- `show <bvid/name> [--last N]`：查看最近记录
 - `list`：列出所有任务
 - `panel`：打开交互式 TUI 面板
-- `export <bvid> [--format csv|json] [--output PATH]`：导出数据
-- `viz <bvid> [--metrics ...] [--type trend|compare]`：生成可视化
-- `daemon [start|stop|status]`：守护进程控制
+- `export <bvid/name> [--format csv|json] [--output PATH]`：导出数据
+- `viz <bvid/name> [--metrics ...] [--type trend|ratio]`：生成可视化
+- `daemon status`：查看守护进程状态
 
 ### `api/client.py` — Bilibili API 封装
 - 封装 `bilibili-api-python` 调用

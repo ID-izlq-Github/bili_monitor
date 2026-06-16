@@ -4,9 +4,9 @@ import asyncio
 import collections
 import logging
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Callable, Optional, Union
+from typing import Optional
 
 from bili_monitor.api.client import BiliAPIClient
 from bili_monitor.config import Settings
@@ -14,10 +14,18 @@ from bili_monitor.db.database import Database
 
 logger = logging.getLogger("bili_monitor.scheduler")
 
+_reload_requested = False
+
+
+def request_reload() -> None:
+    global _reload_requested
+    _reload_requested = True
+
 
 @dataclass
 class TaskInfo:
     bvid: str
+    name: str
     title: str
     uploader: str
     video_id: int
@@ -31,6 +39,7 @@ class TaskInfo:
 @dataclass
 class TaskStatus:
     bvid: str
+    name: str
     title: str
     uploader: str
     active: bool
@@ -111,6 +120,7 @@ class Scheduler:
                 next_run = max(last + timedelta(seconds=row.interval), next_run)
             self._tasks[row.bvid] = TaskInfo(
                 bvid=row.bvid,
+                name=row.name,
                 title=row.title,
                 uploader=row.uploader,
                 video_id=row.video_id,
@@ -120,13 +130,17 @@ class Scheduler:
         if self._tasks:
             logger.info("已加载 %d 个活跃监控任务", len(self._tasks))
 
-    async def add_task(self, bvid: str, interval: int) -> TaskInfo:
+    async def activate_task(self, bvid: str, interval: int) -> TaskInfo:
         meta = await self._api.fetch_video_meta(bvid)
-        video_id = await self._db.upsert_video(bvid, meta.title, meta.uploader)
+        row = await self._db.find_video(bvid)
+        video_id = row["id"] if row else 0
+        if not video_id:
+            raise ValueError(f"视频 {bvid} 不存在，请先 create")
         await self._db.save_interval(video_id, interval)
         await self._db.set_video_active(video_id, True)
         task = TaskInfo(
             bvid=bvid,
+            name=row["name"] if row else bvid,
             title=meta.title,
             uploader=meta.uploader,
             video_id=video_id,
@@ -134,59 +148,64 @@ class Scheduler:
             next_run=datetime.now(),
         )
         self._tasks[bvid] = task
-        logger.info("已添加任务 [%s] %s (间隔 %ds)", bvid, meta.title, interval)
+        logger.info("已激活 [%s] %s (间隔 %ds)", bvid, meta.title, interval)
         return task
 
-    async def remove_task(self, bvid: str) -> Optional[TaskInfo]:
+    async def deactivate_task(self, bvid: str) -> Optional[TaskInfo]:
         task = self._tasks.pop(bvid, None)
-        if task:
-            await self._db.set_video_active(task.video_id, False)
-            await self._db.delete_interval(task.video_id)
-            logger.info("已移除任务 [%s] %s", bvid, task.title)
+        row = await self._db.find_video(bvid)
+        if row:
+            await self._db.set_video_active(row["id"], False)
+            await self._db.delete_interval(row["id"])
+            logger.info("已停用 [%s]", bvid)
+        elif task:
+            logger.info("已停用 [%s] (内存)", bvid)
         return task
 
-    async def update_task(self, bvid: str, interval: int) -> Optional[TaskInfo]:
+    async def update_task(
+        self, bvid: str, interval: Optional[int], name: Optional[str]
+    ) -> Optional[TaskInfo]:
+        row = await self._db.find_video(bvid)
+        if not row:
+            return None
+        if interval is not None:
+            await self._db.save_interval(row["id"], interval)
+        if name is not None:
+            await self._db.update_name(row["id"], name)
         task = self._tasks.get(bvid)
         if task:
-            task.interval = interval
-            await self._db.save_interval(task.video_id, interval)
-            logger.info("已更新任务 [%s] 间隔 -> %ds", bvid, interval)
-        else:
-            rows = await self._db.get_all_tasks()
-            match = [r for r in rows if r.bvid == bvid]
-            if match:
-                await self._db.save_interval(match[0].video_id, interval)
-                await self._db.set_video_active(match[0].video_id, True)
-                meta = await self._api.fetch_video_meta(bvid)
-                video_id = match[0].video_id
-                task = TaskInfo(
-                    bvid=bvid,
-                    title=meta.title,
-                    uploader=meta.uploader,
-                    video_id=video_id,
-                    interval=interval,
-                    next_run=datetime.now(),
-                )
-                self._tasks[bvid] = task
-                logger.info("已加载并更新任务 [%s] 间隔 -> %ds", bvid, interval)
+            if interval is not None:
+                task.interval = interval
+            if name is not None:
+                task.name = name
+            logger.info(
+                "已更新 [%s] 间隔=%s 别名=%s", bvid, interval, name
+            )
         return task
 
     async def _check_external_changes(self) -> None:
+        global _reload_requested
+        _reload_requested = False
         rows = await self._db.get_all_tasks()
         db_map = {r.bvid: r for r in rows}
         for bvid, task in list(self._tasks.items()):
             db_row = db_map.get(bvid)
             if db_row is None:
                 self._tasks.pop(bvid, None)
-                logger.info("任务 [%s] 已从 DB 删除", bvid)
+                logger.info("[同步] %s 已从 DB 删除", bvid)
             elif db_row.active != task.active:
                 task.active = db_row.active
-                logger.info(
-                    "任务 [%s] 状态已同步: active=%s", bvid, db_row.active
-                )
-            elif db_row.interval != task.interval:
-                task.interval = db_row.interval
-                logger.info("任务 [%s] 间隔已同步: %ds", bvid, db_row.interval)
+                logger.info("[同步] %s active=%s", bvid, db_row.active)
+            else:
+                changed = False
+                if db_row.interval != task.interval:
+                    task.interval = db_row.interval
+                    changed = True
+                if db_row.name != task.name:
+                    task.name = db_row.name
+                    changed = True
+                if changed:
+                    logger.info("[同步] %s 参数已更新", bvid)
 
     def get_task(self, bvid: str) -> Optional[TaskInfo]:
         return self._tasks.get(bvid)
@@ -195,6 +214,7 @@ class Scheduler:
         return list(self._tasks.values())
 
     async def run(self) -> None:
+        global _reload_requested
         self._running = True
         await self.load_tasks()
         logger.info("调度器已启动 (tick=%gs)", self._tick_interval)
@@ -205,7 +225,7 @@ class Scheduler:
                 await self._tick()
                 await self._sync_state()
                 tick_count += 1
-                if tick_count % 15 == 0:
+                if tick_count % 15 == 0 or _reload_requested:
                     await self._check_external_changes()
                 await asyncio.sleep(self._tick_interval)
         except asyncio.CancelledError:
@@ -219,8 +239,7 @@ class Scheduler:
     async def _tick(self) -> None:
         now = datetime.now()
         due = [
-            t
-            for t in self._tasks.values()
+            t for t in self._tasks.values()
             if t.active and now >= t.next_run
         ]
         for task in due:
@@ -238,12 +257,9 @@ class Scheduler:
         task.error_count = 0
         logger.info(
             "[%s] %s ✓ %s播放 %s赞 %s币 %s收藏",
-            task.bvid,
-            task.title,
-            _fmt(data.views),
-            _fmt(data.likes),
-            _fmt(data.coins),
-            _fmt(data.favorites),
+            task.bvid, task.title,
+            _fmt(data.views), _fmt(data.likes),
+            _fmt(data.coins), _fmt(data.favorites),
         )
 
     async def _sync_state(self) -> None:
@@ -255,6 +271,7 @@ class Scheduler:
             status_list.append(
                 TaskStatus(
                     bvid=row.bvid,
+                    name=row.name,
                     title=row.title,
                     uploader=row.uploader,
                     active=row.active,
@@ -268,33 +285,22 @@ class Scheduler:
 
     async def _process_commands(self) -> None:
         for action, args, kwargs in self._cmd_queue.drain():
-            if action == "add":
+            if action == "activate":
                 bvid, interval = args
                 try:
-                    await self.add_task(bvid, interval)
-                    logger.info("[面板] 已添加 %s (间隔 %ds)", bvid, interval)
+                    await self.activate_task(bvid, interval)
                 except Exception as e:
-                    logger.warning("[面板] 添加 %s 失败: %s", bvid, e)
-            elif action == "remove":
+                    logger.warning("[面板] 激活 %s 失败: %s", bvid, e)
+            elif action == "deactivate":
                 (bvid,) = args
-                task = await self.remove_task(bvid)
-                if task:
-                    logger.info("[面板] 已移除 %s", bvid)
-                else:
-                    logger.warning("[面板] 未找到 %s", bvid)
-            elif action == "resume":
-                (bvid,) = args
-                task = self._tasks.get(bvid)
-                if task:
-                    task.active = True
-                    await self._db.set_video_active(task.video_id, True)
-                    logger.info("[面板] 已恢复 %s", bvid)
-            elif action == "pause":
-                (bvid,) = args
-                task = self._tasks.get(bvid)
-                if task:
-                    task.active = False
-                    await self._db.set_video_active(task.video_id, False)
+                await self.deactivate_task(bvid)
+            elif action == "update":
+                bvid = args[0]
+                await self.update_task(
+                    bvid,
+                    kwargs.get("interval"),
+                    kwargs.get("name"),
+                )
 
     async def _cleanup(self) -> None:
         self._state.running = False

@@ -10,7 +10,7 @@ from typing import Optional
 
 from bili_monitor.api.client import BiliAPIClient
 from bili_monitor.config import Settings
-from bili_monitor.core.scheduler import MonitorState, Scheduler
+from bili_monitor.core.scheduler import MonitorState, Scheduler, request_reload
 from bili_monitor.db.database import Database
 
 logger = logging.getLogger("bili_monitor.daemon")
@@ -63,6 +63,7 @@ class DaemonManager:
         if pid2 > 0:
             sys.exit(0)
         _write_pid(os.getpid())
+        signal.signal(signal.SIGUSR1, _handle_sigusr1)
         _run_daemon()
         sys.exit(0)
 
@@ -77,6 +78,17 @@ class DaemonManager:
                 break
         _remove_pid()
         return True
+
+    def reload(self) -> bool:
+        pid = self.status()
+        if not pid:
+            return False
+        os.kill(pid, signal.SIGUSR1)
+        return True
+
+
+def _handle_sigusr1(signum: int, frame) -> None:
+    request_reload()
 
 
 def _run_daemon() -> None:

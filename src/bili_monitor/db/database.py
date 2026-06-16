@@ -9,14 +9,17 @@ import asyncio
 
 from bili_monitor.config import Settings
 from bili_monitor.db.models import (
-    RECORDS_INDEX,
-    RECORDS_TABLE,
-    VIDEOS_TABLE,
-    TASK_INTERVALS_TABLE,
+    ADD_NAME_COL,
+    BACKFILL_NAME,
     CHECK_SIZE_SQL,
     DELETE_OLD_RECORDS,
     OLD_RECORDS_SQL,
+    RECORDS_INDEX,
+    RECORDS_TABLE,
+    TASK_INTERVALS_TABLE,
+    VIDEOS_TABLE,
     RecordData,
+    RecordRow,
     TaskRow,
 )
 
@@ -48,6 +51,11 @@ class Database:
         await self._execute(RECORDS_TABLE)
         await self._execute(RECORDS_INDEX)
         await self._execute(TASK_INTERVALS_TABLE)
+        try:
+            await self._execute(ADD_NAME_COL)
+        except sqlite3.OperationalError:
+            pass
+        await self._execute(BACKFILL_NAME)
 
     async def _execute(
         self, sql: str, params: tuple = ()
@@ -79,20 +87,51 @@ class Database:
         async with self._lock:
             await asyncio.to_thread(self._conn.commit)
 
+    # ── Alias / BV lookup ───────────────────────────────────────
+
+    async def find_video(self, bvid_or_name: str) -> Optional[sqlite3.Row]:
+        return await self._fetchone(
+            "SELECT * FROM videos WHERE bvid = ? OR name = ?",
+            (bvid_or_name, bvid_or_name),
+        )
+
+    async def name_exists(self, name: str, exclude_bvid: str = "") -> bool:
+        row = await self._fetchone(
+            "SELECT 1 FROM videos WHERE name = ? AND bvid != ?",
+            (name, exclude_bvid),
+        )
+        return row is not None
+
+    async def count_active(self) -> int:
+        row = await self._fetchone(
+            "SELECT COUNT(*) AS cnt FROM videos WHERE active = 1"
+        )
+        return row["cnt"] if row else 0
+
     # ── Video CRUD ──────────────────────────────────────────────
 
-    async def upsert_video(
-        self, bvid: str, title: str, uploader: str
+    async def create_video(
+        self, bvid: str, name: str, title: str, uploader: str
     ) -> int:
         await self._execute(
-            "INSERT OR IGNORE INTO videos (bvid, title, uploader) "
-            "VALUES (?, ?, ?)",
-            (bvid, title, uploader),
+            "INSERT INTO videos (bvid, name, title, uploader, active) "
+            "VALUES (?, ?, ?, ?, 0)",
+            (bvid, name, title, uploader),
         )
+        await self._commit()
         row = await self._fetchone(
             "SELECT id FROM videos WHERE bvid = ?", (bvid,)
         )
         return row["id"] if row else 0
+
+    async def update_name(
+        self, video_id: int, name: str
+    ) -> None:
+        await self._execute(
+            "UPDATE videos SET name = ? WHERE id = ?",
+            (name, video_id),
+        )
+        await self._commit()
 
     async def update_video_title(
         self, video_id: int, title: str, uploader: str
@@ -117,14 +156,18 @@ class Database:
             "DELETE FROM records WHERE video_id = ?", (video_id,)
         )
         await self._execute(
+            "DELETE FROM task_intervals WHERE video_id = ?",
+            (video_id,),
+        )
+        await self._execute(
             "DELETE FROM videos WHERE id = ?", (video_id,)
         )
         await self._commit()
 
     async def get_all_tasks(self) -> list[TaskRow]:
         rows = await self._fetchall(
-            "SELECT v.id, v.bvid, v.title, v.uploader, v.active, "
-            "COALESCE(i.interval, ?) AS interval, "
+            "SELECT v.id, v.bvid, v.name, v.title, v.uploader, "
+            "v.active, COALESCE(i.interval, ?) AS interval, "
             "v.created_at, "
             "COUNT(r.id) AS record_count, "
             "MAX(r.timestamp) AS last_record "
@@ -139,6 +182,7 @@ class Database:
             TaskRow(
                 video_id=row["id"],
                 bvid=row["bvid"],
+                name=row["name"],
                 title=row["title"],
                 uploader=row["uploader"],
                 active=bool(row["active"]),
@@ -180,7 +224,7 @@ class Database:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
     ) -> list[sqlite3.Row]:
-        sql = "SELECT * FROM records WHERE video_id = ? ORDER BY timestamp ASC"
+        sql = "SELECT * FROM records WHERE video_id = ? ORDER BY timestamp DESC"
         params: tuple = (video_id,)
         if limit is not None:
             sql += " LIMIT ?"
@@ -197,7 +241,7 @@ class Database:
         )
         return row["cnt"] if row else 0
 
-    # ── Task interval persistence ───────────────────────────────
+    # ── Task interval ───────────────────────────────────────────
 
     async def save_interval(
         self, video_id: int, interval: int

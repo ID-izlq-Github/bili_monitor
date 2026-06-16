@@ -19,14 +19,15 @@
 | 功能 | 说明 |
 |------|------|
 | **视频监控** | 给定 BV 号或视频 URL，定时记录播放量、点赞、投币、收藏、弹幕、在线人数等 |
+| **别名系统** | 每个视频绑定唯一别名，后续全部用别名操作，告别 BV 号 |
 | **灵活间隔** | 30s ~ 1h 可配置，默认 5min |
 | **多任务并发** | 最多 5 个任务，所有网络请求串行（绝不并发） |
 | **终端面板** | Rich 交互面板，实时查看任务状态，支持添加/删除 |
-| **参数修改** | `update` 命令随时修改记录间隔，daemon 模式下 30s 内自动同步 |
 | **SQLite 存储** | 零配置，自动建表，WAL 模式 |
 | **数据导出** | CSV / JSON 一键导出 |
 | **可视化** | matplotlib + seaborn 趋势图/比值图，自动保存 |
-| **守护进程** | Linux 后台运行，PID 文件管理 |
+| **守护进程** | Linux 后台运行，PID 文件管理 + SIGUSR1 实时通知 |
+| **自动停启** | `create` 自动激活并启动 daemon；停用最后任务自动关 daemon |
 | **自动提醒** | 数据超 180 天或 DB 超 30MB 时提示清理 |
 
 ---
@@ -54,66 +55,60 @@ pip install -e .
 # 查看帮助
 python -m bili_monitor --help
 
-# 开始监控（前台运行，Ctrl+C 停止）
-python -m bili_monitor start BV1GJ411x7h7 --interval 300
+# 注册新视频
+python -m bili_monitor create BV1GJ411x7h7 --name rick --interval 300
+
+# 已注册的视频直接激活
+python -m bili_monitor start rick
+
+# 查看记录
+python -m bili_monitor show rick --last 5
+
+# 修改别名或间隔
+python -m bili_monitor update rick --name rickroll --interval 600
 
 # 列出所有任务
 python -m bili_monitor list
 
-# 修改任务参数（间隔等）
-python -m bili_monitor update BV1GJ411x7h7 --interval 600
+# 停用指定任务（无活跃任务时自动停守护进程）
+python -m bili_monitor stop rickroll
 
-# 停止指定任务
-python -m bili_monitor stop BV1GJ411x7h7
+# 停用所有任务 + 关守护进程
+python -m bili_monitor stop --all
+
+# 启动守护进程（加载所有活跃任务）
+python -m bili_monitor start
 
 # 打开交互式面板
 python -m bili_monitor panel
 
 # 导出数据
-python -m bili_monitor export BV1GJ411x7h7 --format csv
-python -m bili_monitor export BV1GJ411x7h7 --format json
+python -m bili_monitor export rick --format csv
 
 # 生成可视化
-python -m bili_monitor viz BV1GJ411x7h7 --metrics views,likes,coins --type trend
+python -m bili_monitor viz rick --metrics views,likes,coins --type trend
 
-# 守护进程
-python -m bili_monitor daemon start
+# 查看守护进程状态
 python -m bili_monitor daemon status
-python -m bili_monitor daemon stop
 ```
-
-### Shell 自动补全
-
-typer 内置了命令和选项的自动补全，支持 bash / zsh / fish / powershell：
-
-```bash
-# 查看补全脚本
-python -m bili_monitor --show-completion
-
-# 安装补全（一次安装，永久生效）
-python -m bili_monitor --install-completion
-
-# 如果使用 bili-monitor 入口命令，补全体验更佳
-bili-monitor --install-completion
-```
-
-补全范围：所有子命令名、选项名、枚举选项值（`csv`/`json`、`trend`/`ratio`）。
 
 ---
 
 ## 🧩 子命令详情
 
-### `start` — 开始监控
+### `create` — 注册新视频
 
 ```
-python -m bili_monitor start <BV号/URL> [选项]
+python -m bili_monitor create <BV号/URL> --name <别名> [选项]
 ```
 
 参数：
 | 参数 | 说明 | 默认 |
 |------|------|------|
 | `BV号或URL` | 支持 `BV1xx` 或完整视频链接 | **必填** |
+| `-n, --name` | 别名（后续用别名操作，必须且唯一） | **必填** |
 | `-i, --interval` | 记录间隔（秒） | 300 |
+| `--inactive` | 创建后不自动激活 | 不设 |
 
 支持 URL 格式：
 ```
@@ -122,23 +117,54 @@ www.bilibili.com/video/BV1GJ411x7h7
 BV1GJ411x7h7
 ```
 
-### `update` — 修改任务
+### `start` — 激活任务 / 启动守护进程
 
 ```
-python -m bili_monitor update <BV号> [选项]
+python -m bili_monitor start [别名|BV号] [--all]
+```
+
+| 用法 | 行为 |
+|------|------|
+| `start` | 启动守护进程，加载所有活跃任务 |
+| `start rick` | 激活该任务，守护进程自动启动 |
+| `start --all` | 激活 DB 中所有任务 |
+
+> `start` 无参仅启引擎不改变任务 active 状态。
+
+### `stop` — 停用任务 / 关闭守护进程
+
+```
+python -m bili_monitor stop [别名|BV号] [--all]
+```
+
+| 用法 | 行为 |
+|------|------|
+| `stop rick` | 停用该任务；活跃数归零时自动停守护进程 |
+| `stop --all` | 停用所有任务 + 关闭守护进程 |
+| `stop`（无参） | 报错提示（防误触） |
+
+### `update` — 修改别名或间隔
+
+```
+python -m bili_monitor update <别名|BV号> [选项]
+```
+
+| 参数 | 说明 |
+|------|------|
+| `-n, --name` | 新别名 |
+| `-i, --interval` | 新记录间隔（秒） |
+
+> 仅修改参数，不影响任务的 active 状态。修改后通过 SIGUSR1 立即通知守护进程。
+
+### `show` — 查看记录
+
+```
+python -m bili_monitor show <别名|BV号> [选项]
 ```
 
 | 参数 | 说明 | 默认 |
 |------|------|------|
-| `-i, --interval` | 新的记录间隔（秒） | 300 |
-
-> 同一个 BV 重复 `start` 也会更新间隔。daemon 模式下约 30s 内自动同步。
-
-### `stop` — 停止监控
-
-```
-python -m bili_monitor stop <BV号>
-```
+| `-l, --last` | 显示最近 N 条 | 10 |
 
 ### `panel` — 交互面板
 

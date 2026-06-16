@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Optional
 
 VIDEOS_TABLE = """
 CREATE TABLE IF NOT EXISTS videos (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     bvid        TEXT UNIQUE NOT NULL,
+    name        TEXT UNIQUE NOT NULL,
     title       TEXT NOT NULL,
     uploader    TEXT NOT NULL,
     created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-    active      INTEGER NOT NULL DEFAULT 1
+    active      INTEGER NOT NULL DEFAULT 0
 )
 """
+
+ADD_NAME_COL = "ALTER TABLE videos ADD COLUMN name TEXT"
+BACKFILL_NAME = "UPDATE videos SET name = bvid WHERE name IS NULL"
 
 RECORDS_TABLE = """
 CREATE TABLE IF NOT EXISTS records (
@@ -43,16 +46,14 @@ CREATE TABLE IF NOT EXISTS task_intervals (
 )
 """
 
-DB_SIZE_SQL = "SELECT page_count * page_size AS size_bytes FROM pragma_page_count, pragma_page_size"
+CHECK_SIZE_SQL = """
+SELECT page_count * page_size AS size_bytes
+FROM pragma_page_count, pragma_page_size
+"""
 
 OLD_RECORDS_SQL = """
 SELECT COUNT(*) FROM records
 WHERE timestamp < datetime('now', ? || ' days', 'localtime')
-"""
-
-CHECK_SIZE_SQL = """
-SELECT page_count * page_size AS size_bytes
-FROM pragma_page_count, pragma_page_size
 """
 
 DELETE_OLD_RECORDS = """
@@ -77,6 +78,7 @@ class RecordData:
 class TaskRow:
     video_id: int
     bvid: str
+    name: str
     title: str
     uploader: str
     active: bool
@@ -84,3 +86,16 @@ class TaskRow:
     created_at: str
     record_count: int
     last_record: Optional[str]
+
+
+@dataclass
+class RecordRow:
+    timestamp: str
+    views: int
+    likes: int
+    coins: int
+    favorites: int
+    danmaku: Optional[int]
+    online: Optional[int]
+    shares: Optional[int]
+    rank: Optional[int]

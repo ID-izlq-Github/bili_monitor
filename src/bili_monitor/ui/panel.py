@@ -59,9 +59,9 @@ def _build_table(status_list: list, total_records: int) -> Table:
         title_style="bold white",
     )
     table.add_column("ID", style="dim", width=3)
-    table.add_column("BV号", style="cyan", width=13)
-    table.add_column("标题", width=32, no_wrap=False, overflow="ellipsis")
-    table.add_column("UP主", width=14, overflow="ellipsis")
+    table.add_column("别名", style="cyan", width=14, overflow="ellipsis")
+    table.add_column("BV号", width=13)
+    table.add_column("标题", width=28, no_wrap=False, overflow="ellipsis")
     table.add_column("状态", width=8)
     table.add_column("间隔", justify="right", width=6)
     table.add_column("记录数", justify="right", width=6)
@@ -72,9 +72,9 @@ def _build_table(status_list: list, total_records: int) -> Table:
         last = t.last_run if t.last_run else "[dim]—[/]"
         table.add_row(
             str(idx),
+            t.name,
             t.bvid,
-            t.title,
-            t.uploader,
+            t.title[:24],
             status,
             f"{t.interval}s",
             str(t.record_count),
@@ -121,7 +121,7 @@ def run_panel(state: MonitorState, cmd_queue: CommandQueue) -> None:
 
     try:
         with Live(
-            auto_refresh=False,
+            refresh_per_second=4,
             vertical_overflow="visible",
             screen=False,
         ) as live:
@@ -134,11 +134,9 @@ def run_panel(state: MonitorState, cmd_queue: CommandQueue) -> None:
                     elif key == "a":
                         input_mode = "add_bvid"
                         input_buffer = ""
-                        footer_text = _HELP
                     elif key == "d":
                         input_mode = "delete"
                         input_buffer = ""
-                        footer_text = _HELP
                 else:
                     if key is None:
                         pass
@@ -161,7 +159,7 @@ def run_panel(state: MonitorState, cmd_queue: CommandQueue) -> None:
                         elif input_mode == "add_interval":
                             interval = _parse_interval(input_buffer)
                             if pending_bvid:
-                                cmd_queue.put("add", (pending_bvid, interval))
+                                cmd_queue.put("activate", (pending_bvid, interval))
                                 pending_bvid = None
                             input_mode = None
                             input_buffer = ""
@@ -171,7 +169,7 @@ def run_panel(state: MonitorState, cmd_queue: CommandQueue) -> None:
                                 tasks = state.snapshot()
                                 bvid = _find_bvid_by_id(tasks, int(input_buffer))
                                 if bvid:
-                                    cmd_queue.put("remove", (bvid,))
+                                    cmd_queue.put("deactivate", (bvid,))
                             input_mode = None
                             input_buffer = ""
                             footer_text = _HELP
@@ -191,7 +189,8 @@ def run_panel(state: MonitorState, cmd_queue: CommandQueue) -> None:
                 total = sum(t.record_count for t in tasks)
                 layout = _make_layout(_build_table(tasks, total), footer_text)
                 live.update(layout)
-                live.refresh()
+                if key is not None:
+                    live.refresh()
                 time.sleep(0.01)
 
     except (KeyboardInterrupt, EOFError):

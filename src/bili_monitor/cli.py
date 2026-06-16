@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import signal
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -14,6 +14,7 @@ from rich.table import Table
 from bili_monitor.api.client import BiliAPIClient
 from bili_monitor.config import Settings
 from bili_monitor.core.scheduler import CommandQueue, MonitorState, Scheduler
+from bili_monitor.daemon.daemon import DaemonManager
 from bili_monitor.db.database import Database
 from bili_monitor.ui.panel import run_panel
 
@@ -32,9 +33,6 @@ app = typer.Typer(
 )
 
 
-# ── Shared init ─────────────────────────────────────────────────
-
-
 async def _init() -> tuple[Database, BiliAPIClient]:
     cfg = Settings.get_instance()
     db = Database(cfg.db_path)
@@ -49,72 +47,205 @@ async def _cleanup(db: Database, api: BiliAPIClient) -> None:
     await api.close()
 
 
-# ── start ───────────────────────────────────────────────────────
+def _find_bvid(api: BiliAPIClient, raw: str) -> str:
+    try:
+        return BiliAPIClient.resolve_bvid(raw)
+    except ValueError:
+        return raw
+
+
+def _auto_name(raw: str) -> str:
+    ts = datetime.now().strftime("%H%M%S")
+    return f"bili_{ts}"
+
+
+# ── create ─────────────────────────────────────────────────────
 
 
 @app.command()
-def start(
+def create(
     bvid: str = typer.Argument(..., help="BV号或视频URL"),
+    name: str = typer.Option("", "--name", "-n", help="别名（不传则自动生成）"),
     interval: int = typer.Option(
         300, "--interval", "-i",
-        min=30, max=3600,
-        help="记录间隔（秒）",
+        min=30, max=3600, help="记录间隔（秒）",
+    ),
+    inactive: bool = typer.Option(
+        False, "--inactive", help="创建后不自动激活",
     ),
 ):
-    """开始监控一个视频（前台运行，Ctrl+C 停止）"""
-    asyncio.run(_cmd_start(bvid, interval))
+    """注册新视频到系统"""
+    asyncio.run(_cmd_create(bvid, name, interval, inactive))
 
 
-async def _cmd_start(bvid: str, interval: int) -> None:
+async def _cmd_create(
+    raw: str, name: str, interval: int, inactive: bool
+) -> None:
     db, api = await _init()
     try:
-        bvid = BiliAPIClient.resolve_bvid(bvid)
-        state = MonitorState()
-        sched = Scheduler(db, api, state)
-        await sched.add_task(bvid, interval)
-        console.print(
-            f"[green]✓[/] 开始监控 [bold]{bvid}[/] (间隔 {interval}s)\n"
-            "[dim]按 Ctrl+C 停止[/dim]"
-        )
-        loop = asyncio.get_event_loop()
-        stop_event = asyncio.Event()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                loop.add_signal_handler(sig, stop_event.set)
-            except NotImplementedError:
-                pass
-        run_task = asyncio.create_task(sched.run())
-        await stop_event.wait()
-        sched.stop()
-        await run_task
-        console.print("\n[yellow]监控已停止[/]")
+        bvid = BiliAPIClient.resolve_bvid(raw)
+        exist = await db.find_video(bvid)
+        if exist:
+            console.print(f"[red]✗[/] BV [bold]{bvid}[/] 已存在，请直接 start")
+            raise typer.Exit(1)
+
+        resolved_name = name or _auto_name(raw)
+        if await db.name_exists(resolved_name):
+            console.print(f"[red]✗[/] 别名 [bold]{resolved_name}[/] 已被使用")
+            raise typer.Exit(1)
+
+        meta = await api.fetch_video_meta(bvid)
+        video_id = await db.create_video(bvid, resolved_name, meta.title, meta.uploader)
+        await db.save_interval(video_id, interval)
+
+        if not inactive:
+            await db.set_video_active(video_id, True)
+            await api.close()
+            await db.close()
+            mgr = DaemonManager()
+            if not mgr.status():
+                mgr.start()
+                console.print("[green]✓[/] 守护进程已启动")
+            else:
+                mgr.reload()
+            console.print(
+                f"[green]✓[/] 已创建并激活 [bold]{resolved_name}[/] ({bvid})"
+            )
+        else:
+            console.print(f"[green]✓[/] 已创建 [bold]{resolved_name}[/] ({bvid}) [dim](未激活)[/]")
     finally:
         await _cleanup(db, api)
 
 
-# ── stop ────────────────────────────────────────────────────────
+# ── delete ─────────────────────────────────────────────────────
+
+
+@app.command()
+def delete(
+    bvid_or_name: str = typer.Argument(..., help="BV号或别名"),
+):
+    """彻底删除视频及所有记录"""
+    asyncio.run(_cmd_delete(bvid_or_name))
+
+
+async def _cmd_delete(bvid_or_name: str) -> None:
+    db, api = await _init()
+    try:
+        row = await db.find_video(bvid_or_name)
+        if not row:
+            console.print(f"[red]✗[/] 未找到 [bold]{bvid_or_name}[/]")
+            raise typer.Exit(1)
+        await db.delete_video(row["id"])
+        mgr = DaemonManager()
+        mgr.reload()
+        console.print(f"[green]✓[/] 已删除 [bold]{row['name']}[/]")
+    finally:
+        await _cleanup(db, api)
+
+
+# ── start ──────────────────────────────────────────────────────
+
+
+@app.command()
+def start(
+    bvid_or_name: Optional[str] = typer.Argument(
+        None, help="BV号或别名（不传则启动守护进程）"
+    ),
+    all: bool = typer.Option(False, "--all", "-a", help="激活所有任务"),
+):
+    """启动守护进程 / 激活任务"""
+    asyncio.run(_cmd_start(bvid_or_name, all))
+
+
+async def _cmd_start(
+    bvid_or_name: Optional[str], all: bool
+) -> None:
+    db, api = await _init()
+    try:
+        if all:
+            tasks = await db.get_all_tasks()
+            for t in tasks:
+                if not t.active:
+                    await db.set_video_active(t.video_id, True)
+
+        if bvid_or_name:
+            row = await db.find_video(bvid_or_name)
+            if not row:
+                console.print(f"[red]✗[/] 未找到 [bold]{bvid_or_name}[/]，请先 create")
+                raise typer.Exit(1)
+            await db.set_video_active(row["id"], True)
+
+        await api.close()
+        await db.close()
+        mgr = DaemonManager()
+        if all or bvid_or_name:
+            if not mgr.status():
+                mgr.start()
+            else:
+                mgr.reload()
+            if all:
+                console.print("[green]✓[/] 已激活所有任务")
+            else:
+                console.print(f"[green]✓[/] 已激活 [bold]{row['name']}[/]")
+        else:
+            if mgr.status():
+                console.print("[yellow]守护进程已在运行中[/]")
+            else:
+                mgr.start()
+                console.print("[green]✓[/] 守护进程已启动")
+    finally:
+        await _cleanup(db, api)
+
+
+# ── stop ───────────────────────────────────────────────────────
 
 
 @app.command()
 def stop(
-    bvid: str = typer.Argument(..., help="BV号或视频URL"),
+    bvid_or_name: Optional[str] = typer.Argument(
+        None, help="BV号或别名（不传则报错）"
+    ),
+    all: bool = typer.Option(False, "--all", "-a", help="停用所有任务并关闭守护进程"),
 ):
-    """停止一个监控任务"""
-    asyncio.run(_cmd_stop(bvid))
+    """停用任务 / 关闭守护进程"""
+    asyncio.run(_cmd_stop(bvid_or_name, all))
 
 
-async def _cmd_stop(bvid: str) -> None:
+async def _cmd_stop(
+    bvid_or_name: Optional[str], all: bool
+) -> None:
     db, api = await _init()
     try:
-        bvid = BiliAPIClient.resolve_bvid(bvid)
-        tasks = await db.get_all_tasks()
-        match = [t for t in tasks if t.bvid == bvid]
-        if not match:
-            console.print(f"[red]✗[/] 未找到任务 [bold]{bvid}[/]")
+        mgr = DaemonManager()
+
+        if all:
+            tasks = await db.get_all_tasks()
+            for t in tasks:
+                if t.active:
+                    await db.set_video_active(t.video_id, False)
+            mgr.stop()
+            console.print("[green]✓[/] 已停用所有任务，守护进程已停止")
+            return
+
+        if not bvid_or_name:
+            console.print("[red]✗[/] 请指定 BV号/别名 (--all 停用所有)")
             raise typer.Exit(1)
-        await db.set_video_active(match[0].video_id, False)
-        await db.delete_interval(match[0].video_id)
-        console.print(f"[green]✓[/] 已停止 [bold]{bvid}[/]")
+
+        row = await db.find_video(bvid_or_name)
+        if not row:
+            console.print(f"[red]✗[/] 未找到 [bold]{bvid_or_name}[/]")
+            raise typer.Exit(1)
+        await db.set_video_active(row["id"], False)
+        mgr.reload()
+        active_left = await db.count_active()
+        if active_left == 0:
+            mgr.stop()
+            console.print(
+                f"[green]✓[/] 已停用 [bold]{row['name']}[/]，"
+                "[dim]无活跃任务，守护进程已停止[/]"
+            )
+        else:
+            console.print(f"[green]✓[/] 已停用 [bold]{row['name']}[/]")
     finally:
         await _cleanup(db, api)
 
@@ -124,36 +255,92 @@ async def _cmd_stop(bvid: str) -> None:
 
 @app.command()
 def update(
-    bvid: str = typer.Argument(..., help="BV号"),
-    interval: int = typer.Option(
-        300, "--interval", "-i",
-        min=30, max=3600,
-        help="新的记录间隔（秒）",
+    bvid_or_name: str = typer.Argument(..., help="BV号或别名"),
+    name: Optional[str] = typer.Option(None, "--name", "-n", help="新别名"),
+    interval: Optional[int] = typer.Option(
+        None, "--interval", "-i",
+        min=30, max=3600, help="新记录间隔（秒）",
     ),
 ):
-    """修改监控任务的参数（如记录间隔）"""
-    asyncio.run(_cmd_update(bvid, interval))
+    """修改任务别名或记录间隔"""
+    asyncio.run(_cmd_update(bvid_or_name, name, interval))
 
 
-async def _cmd_update(bvid: str, interval: int) -> None:
+async def _cmd_update(
+    bvid_or_name: str, name: Optional[str], interval: Optional[int]
+) -> None:
     db, api = await _init()
     try:
-        bvid = BiliAPIClient.resolve_bvid(bvid)
-        tasks = await db.get_all_tasks()
-        match = [t for t in tasks if t.bvid == bvid]
-        if not match:
-            console.print(f"[red]✗[/] 未找到任务 [bold]{bvid}[/]")
+        row = await db.find_video(bvid_or_name)
+        if not row:
+            console.print(f"[red]✗[/] 未找到 [bold]{bvid_or_name}[/]")
             raise typer.Exit(1)
-        await db.save_interval(match[0].video_id, interval)
-        await db.set_video_active(match[0].video_id, True)
-        console.print(
-            f"[green]✓[/] 已更新 [bold]{bvid}[/] 间隔 -> [bold]{interval}s[/]"
-        )
+        if name is not None:
+            if await db.name_exists(name, exclude_bvid=row["bvid"]):
+                console.print(f"[red]✗[/] 别名 [bold]{name}[/] 已被使用")
+                raise typer.Exit(1)
+            await db.update_name(row["id"], name)
+        if interval is not None:
+            await db.save_interval(row["id"], interval)
+        mgr = DaemonManager()
+        mgr.reload()
+        parts = [f"[bold]{row['name']}[/]"]
+        if name is not None:
+            parts.append(f"别名→{name}")
+        if interval is not None:
+            parts.append(f"间隔→{interval}s")
+        console.print(f"[green]✓[/] 已更新 " + "，".join(parts))
     finally:
         await _cleanup(db, api)
 
 
-# ── list ────────────────────────────────────────────────────────
+# ── show ───────────────────────────────────────────────────────
+
+
+@app.command()
+def show(
+    bvid_or_name: str = typer.Argument(..., help="BV号或别名"),
+    last: int = typer.Option(
+        10, "--last", "-l",
+        min=1, max=200, help="显示最近 N 条记录",
+    ),
+):
+    """查看视频记录数据"""
+    asyncio.run(_cmd_show(bvid_or_name, last))
+
+
+async def _cmd_show(bvid_or_name: str, last: int) -> None:
+    db, api = await _init()
+    try:
+        row = await db.find_video(bvid_or_name)
+        if not row:
+            console.print(f"[red]✗[/] 未找到 [bold]{bvid_or_name}[/]")
+            raise typer.Exit(1)
+        records = await db.get_records(row["id"], limit=last)
+        if not records:
+            console.print(f"[yellow][/] [bold]{row['name']}[/] 暂无记录")
+            return
+        table = Table(title=f"{row['name']} — 最近 {len(records)} 条记录")
+        table.add_column("时间", style="dim", width=19)
+        table.add_column("播放", justify="right")
+        table.add_column("点赞", justify="right")
+        table.add_column("投币", justify="right")
+        table.add_column("收藏", justify="right")
+        table.add_column("弹幕", justify="right")
+        table.add_column("在线", justify="right")
+        for r in records:
+            table.add_row(
+                r["timestamp"][:19],
+                _n(r["views"]), _n(r["likes"]),
+                _n(r["coins"]), _n(r["favorites"]),
+                _n(r["danmaku"]), _n(r["online"]),
+            )
+        console.print(table)
+    finally:
+        await _cleanup(db, api)
+
+
+# ── list ───────────────────────────────────────────────────────
 
 
 @app.command()
@@ -170,8 +357,9 @@ async def _cmd_list() -> None:
             console.print("[yellow]暂无监控任务[/]")
             return
         table = Table(title=f"监控任务 ({len(tasks)})")
-        table.add_column("BV号", style="cyan")
-        table.add_column("标题", style="white", no_wrap=False)
+        table.add_column("别名", style="cyan")
+        table.add_column("BV号")
+        table.add_column("标题", no_wrap=False)
         table.add_column("UP主")
         table.add_column("状态")
         table.add_column("间隔")
@@ -181,7 +369,7 @@ async def _cmd_list() -> None:
             status = "[green]● 活跃[/]" if t.active else "[dim]● 停止[/]"
             last = t.last_record or "[dim]—[/]"
             table.add_row(
-                t.bvid, t.title[:40], t.uploader,
+                t.name, t.bvid, t.title[:40], t.uploader,
                 status, f"{t.interval}s",
                 str(t.record_count), last,
             )
@@ -190,7 +378,7 @@ async def _cmd_list() -> None:
         await _cleanup(db, api)
 
 
-# ── panel ───────────────────────────────────────────────────────
+# ── panel ──────────────────────────────────────────────────────
 
 
 @app.command()
@@ -212,7 +400,6 @@ def panel():
             finally:
                 await api.close()
                 await db.close()
-
         asyncio.run(_main())
 
     thread = threading.Thread(target=_run_scheduler, daemon=True)
@@ -227,118 +414,105 @@ def panel():
         thread.join(timeout=5)
 
 
-# ── export ──────────────────────────────────────────────────────
+# ── export ─────────────────────────────────────────────────────
 
 
 @app.command()
 def export(
-    bvid: str = typer.Argument(..., help="BV号"),
+    bvid_or_name: str = typer.Argument(..., help="BV号或别名"),
     fmt: str = typer.Option(
-        "csv", "--format", "-f",
-        help="导出格式 (csv/json)",
+        "csv", "--format", "-f", help="导出格式 (csv/json)",
     ),
     output: Optional[Path] = typer.Option(
-        None, "--output", "-o",
-        help="输出路径（默认自动生成）",
+        None, "--output", "-o", help="输出路径",
     ),
 ):
     """导出视频记录数据"""
-    asyncio.run(_cmd_export(bvid, fmt, output))
+    asyncio.run(_cmd_export(bvid_or_name, fmt, output))
 
 
 async def _cmd_export(
-    bvid: str, fmt: str, output: Optional[Path]
+    bvid_or_name: str, fmt: str, output: Optional[Path]
 ) -> None:
     db, api = await _init()
     try:
-        bvid = BiliAPIClient.resolve_bvid(bvid)
-        tasks = await db.get_all_tasks()
-        match = [t for t in tasks if t.bvid == bvid]
-        if not match:
-            console.print(f"[red]✗[/] 未找到 [bold]{bvid}[/] 的记录")
+        row = await db.find_video(bvid_or_name)
+        if not row:
+            console.print(f"[red]✗[/] 未找到 [bold]{bvid_or_name}[/]")
             raise typer.Exit(1)
         from bili_monitor.export.exporter import export_records
         path = await export_records(
-            bvid, match[0].video_id, fmt, db, output
+            row["bvid"], row["id"], fmt, db, output
         )
         console.print(f"[green]✓[/] 已导出 → [bold]{path}[/]")
     finally:
         await _cleanup(db, api)
 
 
-# ── viz ─────────────────────────────────────────────────────────
+# ── viz ────────────────────────────────────────────────────────
 
 
 @app.command()
 def viz(
-    bvid: str = typer.Argument(..., help="BV号"),
+    bvid_or_name: str = typer.Argument(..., help="BV号或别名"),
     metrics: str = typer.Option(
-        "views,likes,coins",
-        "--metrics", "-m",
+        "views,likes,coins", "--metrics", "-m",
         help="指标列表（逗号分隔）",
     ),
     type: str = typer.Option(
         "trend", "--type", "-t",
-        help="图表类型: trend / compare / ratio",
+        help="图表类型: trend / ratio",
     ),
 ):
     """生成数据可视化"""
-    asyncio.run(_cmd_viz(bvid, metrics, type))
+    asyncio.run(_cmd_viz(bvid_or_name, metrics, type))
 
 
-async def _cmd_viz(bvid: str, metrics: str, type: str) -> None:
+async def _cmd_viz(bvid_or_name: str, metrics: str, type: str) -> None:
     db, api = await _init()
     try:
-        bvid = BiliAPIClient.resolve_bvid(bvid)
-        tasks = await db.get_all_tasks()
-        match = [t for t in tasks if t.bvid == bvid]
-        if not match:
-            console.print(f"[red]✗[/] 未找到 [bold]{bvid}[/] 的记录")
+        row = await db.find_video(bvid_or_name)
+        if not row:
+            console.print(f"[red]✗[/] 未找到 [bold]{bvid_or_name}[/]")
             raise typer.Exit(1)
         metric_list = [m.strip() for m in metrics.split(",")]
         from bili_monitor.viz.plots import generate_plot
         path = await generate_plot(
-            bvid, match[0].video_id, db, metric_list, type
+            row["bvid"], row["id"], db, metric_list, type
         )
         console.print(f"[green]✓[/] 可视化已生成 → [bold]{path}[/]")
     finally:
         await _cleanup(db, api)
 
 
-# ── daemon ──────────────────────────────────────────────────────
+# ── daemon status ──────────────────────────────────────────────
 
 
 @app.command()
 def daemon(
     action: str = typer.Argument(
-        "status",
-        help="start / stop / status",
+        "status", help="status",
     ),
 ):
-    """管理守护进程（后台运行）"""
-    asyncio.run(_cmd_daemon(action))
-
-
-async def _cmd_daemon(action: str) -> None:
-    from bili_monitor.daemon.daemon import DaemonManager
-    mgr = DaemonManager()
-    if action == "start":
-        pid = mgr.start()
-        if pid:
-            console.print(f"[green]✓[/] 守护进程已启动 (PID: {pid})")
-        else:
-            console.print("[yellow]守护进程已在运行中[/]")
-    elif action == "stop":
-        if mgr.stop():
-            console.print("[green]✓[/] 守护进程已停止")
-        else:
-            console.print("[yellow]守护进程未在运行[/]")
-    elif action == "status":
-        pid = mgr.status()
-        if pid:
-            console.print(f"[green]●[/] 守护进程运行中 (PID: {pid})")
-        else:
-            console.print("[dim]○[/] 守护进程未运行")
-    else:
-        console.print(f"[red]未知操作: {action} (start/stop/status)[/]")
+    """查看守护进程状态"""
+    if action != "status":
+        console.print("[red]仅支持 daemon status[/]")
         raise typer.Exit(1)
+    mgr = DaemonManager()
+    pid = mgr.status()
+    if pid:
+        console.print(f"[green]●[/] 守护进程运行中 (PID: {pid})[/]")
+    else:
+        console.print("[dim]○[/] 守护进程未运行")
+
+
+# ── helpers ────────────────────────────────────────────────────
+
+
+def _n(val) -> str:
+    if val is None:
+        return "[dim]—[/]"
+    n = int(val)
+    if n >= 10_000:
+        return f"{n / 10_000:.1f}万"
+    return str(n)
