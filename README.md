@@ -20,7 +20,7 @@
 |------|------|
 | **视频监控** | 给定 BV 号或视频 URL，定时记录播放量、点赞、投币、收藏、弹幕、评论、在线人数、历史最高排名等 |
 | **别名系统** | 每个视频绑定唯一别名，后续全部用别名操作，告别 BV 号 |
-| **灵活间隔** | 30s 起，不设上限（>3600s 时二次确认），默认 15min |
+| **灵活间隔** | 60s 起，不设上限（>3600s 时二次确认），默认 15min |
 | **多任务并发** | 最多 5 个任务，所有网络请求串行（绝不并发） |
 | **记录查看** | `show` 命令终端直接查看最近记录，无需导文件 |
 | **手动记录** | `snap` 命令随时手动记录一次，不等待调度器 |
@@ -28,7 +28,7 @@
 | **数据导出** | CSV / JSON 一键导出（含 bvid 列，便于导入） |
 | **数据导入** | CSV / JSON 一键导入，自动去重，支持覆盖和预览 |
 | **发布基线** | 自动记录视频发布时间，7 天内新视频插入全 0 基线记录 |
-| **可视化** | `viz` 一键生成 8 张分析图：核心趋势、互动脉冲、质量指数、三连转化、观看留存(VDR)、平均停留、裂变散点、时滞归因；支持自定义权重 |
+| **可视化** | `viz` 一键生成 7 张分析图：核心趋势、互动增量、转化效率、三连率、观看留存(VDR)、平均停留、累计总量；支持自定义权重 |
 | **守护进程** | Linux 后台运行，PID 文件管理 + SIGUSR1 实时通知 |
 | **自动停启** | `create` 自动激活并启动 daemon；停用最后任务自动关 daemon |
 | **自动提醒** | 数据超 180 天或 DB 超 30MB 时提示清理 |
@@ -242,13 +242,12 @@ python -m bili_monitor viz <别名|BV号> [选项]
 ```
 {bvid}-{name}/{last_ts}/
 ├── 01_播放与互动.png       播放量(左) + 点赞·投币(右) 双轴趋势
-├── 02_互动增量.png         每小时各互动指标的增量变化
-├── 03_互动转化效率.png     每次播放产生的互动价值评分 (HDS)
-├── 04_三连率.png           点赞/投币/收藏 ÷ 播放，反映互动意愿
-├── 05_观看留存率.png       实际播放 ÷ 在线期望，>1 表示超预期
+├── 02_互动增量.png         30min分桶 + SMA平滑，各互动指标增量变化
+├── 03_互动转化效率.png     加权互动深度 (HDS) + 移动平均 + 异常检测
+├── 04_三连率.png           点赞/投币/收藏÷播放(左) + 投币/点赞(右)，含累计虚线
+├── 05_观看留存率.png       累积窗口 VDR（∑Δt≥视频时长输出一点）
 ├── 06_平均观看时长.png     单次观看秒数，红线 = 视频全长
-├── 07_传播效率.png         需在线数据支持 (采集中)
-└── 08_分享传播影响.png     转发前置对播放的影响，标注最佳时滞
+└── 07_累计绝对值趋势.png   点赞/投币(左) 收藏(右) 总量增长曲线
 ```
 
 内置热度权重（HDS 公式）：
@@ -278,7 +277,7 @@ export BILI_DATA_DIR=/path/to/data
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| 最小间隔 | 30s | — |
+| 最小间隔 | 60s | — |
 | 默认间隔 | 900s（15 分钟） | 不设上限，>3600s 时二次确认 |
 | 最大任务数 | 5 | — |
 | DB 提醒阈值 | 30MB | 超出提示清理 |
@@ -293,9 +292,8 @@ export BILI_DATA_DIR=/path/to/data
 | CLI 框架 | [typer](https://github.com/fastapi/typer) | 命令解析，类型安全 |
 | 终端 UI | [rich](https://github.com/Textualize/rich) | 表格渲染 |
 | API 封装 | [bilibili-api-python](https://github.com/Passkou/bilibili-api-python) | Bilibili 数据接口 |
-| 异步 HTTP | [aiohttp](https://github.com/aio-libs/aiohttp) | (库内部) TCP 连接池 |
 | 数据库 | SQLite3 (stdlib) | 零依赖嵌入式存储 |
-| 可视化 | [matplotlib](https://github.com/matplotlib/matplotlib) | 8 种分析图表：趋势/脉冲/质量指数/转化/VDR/停留/散点/时滞 |
+| 可视化 | [matplotlib](https://github.com/matplotlib/matplotlib) | 7 张分析图表 |
 | 日志 | logging (stdlib) | 标准日志模块 |
 | 任务调度 | 自研 async tick loop | 轻量可控，无外部依赖 |
 
@@ -336,7 +334,7 @@ bili_monitor/
 
 - **无需登录**：所有数据通过 Bilibili 公开 API 获取
 - **串行请求**：`asyncio.Semaphore(1)` 保证全局任意时刻只有 1 个 HTTP 请求
-- **请求间隔**：最低 30s，配合串行策略，不会触发频率限制
+- **请求间隔**：最低 60s，配合串行策略，不会触发频率限制
 - **本地存储**：所有数据保存在本地 SQLite，不经过任何第三方
 - **WAL 模式**：写操作不阻塞读，监控与导出/可视化可同时进行
 
@@ -349,7 +347,6 @@ bili_monitor/
 - [typer](https://github.com/fastapi/typer) — 优雅的 CLI 框架
 - [rich](https://github.com/Textualize/rich) — 强大的终端渲染库
 - [bilibili-api-python](https://github.com/Passkou/bilibili-api-python) — Bilibili API Python 封装
-- [aiohttp](https://github.com/aio-libs/aiohttp) — 高性能异步 HTTP
 - [matplotlib](https://github.com/matplotlib/matplotlib) — 经典可视化库
 
 ---

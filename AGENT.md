@@ -84,7 +84,8 @@ videos (
     active      INTEGER DEFAULT 0,             -- 是否活跃监控中
     pubdate     TEXT,                          -- 发布时间 (ISO, nullable)
     duration    INTEGER,                       -- 视频长度 (秒)
-    tname       TEXT                            -- 分区 (如"知识"/"游戏"/"音乐")
+    tname       TEXT,                           -- 分区 (如"知识"/"游戏"/"音乐")
+    videos      INTEGER DEFAULT 1               -- 分P数量
 )
 
 -- 时间序列记录
@@ -124,7 +125,7 @@ CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
 - `delete <bvid/name>`：彻底删除视频及所有记录
 - `start [bvid/name] [--all]`：激活任务 / 启动 daemon
 - `stop [bvid/name] [--all]`：停用任务 / 关 daemon
-- `update <bvid/name> [--name X] [--interval N]`：修改别名或间隔
+- `update <bvid/name> [--name X] [--interval N] [--refresh-meta]`：修改别名/间隔，或刷新标题/UP主/时长/分区等元数据
 - `show <bvid/name> [--last N]`：查看最近记录（含评论、历史最高排名列）
 - `list`：列出所有任务（含发布时间、分区、时长列）
 - `export <bvid/name> [--format csv|json] [--output PATH]`：导出数据（含 bvid 列）
@@ -165,20 +166,17 @@ CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
 
 ### `viz/plots.py` — 可视化
 - matplotlib (Agg backend)，保存到 `output/image/`
-- 单命令 `bili-monitor viz <name>` 一次性生成 8 张分析图表
-- 数据充足度自动决定生成范围（≥15 条出散点图，≥20 条出时滞图）
+- 单命令 `bili-monitor viz <name>` 一次性生成 7 张分析图表
 - 输出路径：`{image_dir}/{bvid}-{name}/{last_ts}/`
-- 8 张图表：
+- 7 张图表：
   1. **播放与互动** — 播放量(左) + 点赞·投币(右) 双轴趋势
-  2. **互动增量** — 每小时各互动指标折线变化
+  2. **互动增量** — 30min分桶 + SMA平滑，各互动指标增量变化
   3. **互动转化效率** — 加权互动深度 (HDS) + 移动平均 + 异常检测
-  4. **三连率** — 点赞/投币/收藏 ÷ 播放 折线
-  5. **观看留存率** — 实际播放 ÷ 在线期望，>1 表示超预期
+  4. **三连率** — 点赞/投币/收藏÷播放(左) + 投币/点赞(右)，累计虚线从总量比值计算
+  5. **观看留存率** — 累积窗口 VDR，∑Δt≥视频时长时输出一个点
   6. **平均观看时长** — 平均观看秒数 + 视频全长红线
-  7. **传播效率** — 需在线数据支持，数据充足后自动生成
-  8. **分享传播影响** — 小时级时滞归因分析，自动计算最佳偏移
+  7. **累计绝对值趋势** — 点赞/投币(左) 收藏(右) 总量增长曲线
 - 内置热度权重 + 可外部 JSON 覆盖
-- 美化：专业配色、页脚时间戳、异常点星标、统计信息标注框
 
 ### `daemon/daemon.py` — 守护进程
 - Linux：`os.fork()` + PID 文件
@@ -189,7 +187,7 @@ CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
 ### `config.py` — 配置
 - 默认值：间隔 900s，数据目录 `./bili_monitor.db`，图片目录 `./output/image/`
 - 环境变量 `BILI_DATA_DIR` 覆盖数据目录
-- 常量：最小间隔 30s，最大任务数 5
+- 常量：最小间隔 60s，最大任务数 5
 
 ## 运行模式
 
@@ -241,7 +239,7 @@ $ python -m bili_monitor daemon status
 | CLI 框架 | typer | 已有、类型安全、自动 --help |
 | 进程 | `python -m bili_monitor` | 用户要求，src layout 原生支持 |
 | 登录 | 不支持 | 用户确认，公开 API 即可 |
-| 可视化 | 保存文件到 output/image/ | 8 类型 (report 模式)，Agg 后端 |
+| 可视化 | 保存文件到 output/image/ | 7 张图表 (report 模式)，Agg 后端 |
 | 守护进程 | fork + PID file（首选 Linux） | 简单可靠 |
 | 配置变更通知 | SIGUSR1 | CLI 直接 kill 发信号，零 IPC 依赖 |
 
