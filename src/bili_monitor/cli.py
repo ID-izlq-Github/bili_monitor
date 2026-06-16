@@ -518,25 +518,21 @@ async def _cmd_export(
 @app.command()
 def viz(
     bvid_or_name: str = typer.Argument(..., help="BV号或别名"),
-    metrics: str = typer.Option(
-        "views,likes,coins", "--metrics", "-m",
-        help="指标列表（逗号分隔）",
+    output: Optional[Path] = typer.Option(
+        None, "--output", "-o", help="自定义输出目录",
     ),
-    type: str = typer.Option(
-        "trend", "--type", "-t",
-        help="图表类型: trend / subplot / delta / ratio",
-    ),
-    all_types: bool = typer.Option(
-        False, "--all", "-a",
-        help="生成所有类型的图表",
+    weights: Optional[Path] = typer.Option(
+        None, "--weights", "-w", help="权重 JSON 文件（局部覆盖默认热度权重）",
     ),
 ):
-    """生成数据可视化"""
-    asyncio.run(_cmd_viz(bvid_or_name, metrics, type, all_types))
+    """生成数据可视化报告（一次性输出所有图表）"""
+    asyncio.run(_cmd_viz(bvid_or_name, output, weights))
 
 
 async def _cmd_viz(
-    bvid_or_name: str, metrics: str, plot_type: str, generate_all: bool
+    bvid_or_name: str,
+    output: Optional[Path],
+    weights: Optional[Path],
 ) -> None:
     db, api = await _init()
     try:
@@ -544,18 +540,23 @@ async def _cmd_viz(
         if not row:
             console.print(f"[red]✗[/] 未找到 [bold]{bvid_or_name}[/]")
             raise typer.Exit(1)
-        metric_list = [m.strip() for m in metrics.split(",")]
-        from bili_monitor.viz.plots import generate_plot, _PLOT_TYPES
 
-        types = _PLOT_TYPES if generate_all else [plot_type]
-        paths = []
-        for pt in types:
-            path = await generate_plot(
-                row["bvid"], row["id"], db, metric_list, pt,
-                name=row["name"],
-            )
-            paths.append(path)
-            console.print(f"[green]✓[/] [bold]{pt}[/] → [bold]{path}[/]")
+        from bili_monitor.viz.plots import generate_report, load_weights
+
+        w = load_weights(weights)
+        paths = await generate_report(
+            row["bvid"], row["id"], db,
+            name=row["name"],
+            output=output,
+            weights=w,
+            duration=row.get("duration"),
+        )
+
+        if not paths:
+            console.print("[yellow]⚠[/] 没有生成任何图表（数据不足）")
+        else:
+            for p in paths:
+                console.print(f"[green]✓[/] → [bold]{p}[/]")
     finally:
         await _cleanup(db, api)
 

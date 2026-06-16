@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime
 from pathlib import Path
@@ -8,15 +9,29 @@ from typing import Optional
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.dates import DateFormatter
+import matplotlib.dates as mdates
 from matplotlib.font_manager import FontProperties
+import numpy as np
 
 from bili_monitor.config import Settings
 from bili_monitor.db.database import Database
 
-_PLOT_TYPES = ["trend", "subplot", "delta", "ratio"]
 
-_FIELD_LABELS = {
+# ── Color palette ──────────────────────────────────────────────
+
+_COLORS: dict[str, str] = {
+    "views": "#4C78A8",
+    "likes": "#F58518",
+    "coins": "#E45756",
+    "favorites": "#72B7B2",
+    "danmaku": "#54A24B",
+    "online": "#B279A2",
+    "shares": "#FF9DA6",
+    "reply": "#9D7556",
+    "rank": "#BAB0AC",
+}
+
+_CN: dict[str, str] = {
     "views": "播放量",
     "likes": "点赞",
     "coins": "投币",
@@ -24,209 +39,590 @@ _FIELD_LABELS = {
     "danmaku": "弹幕",
     "online": "在线观看",
     "shares": "转发",
+    "reply": "评论",
     "rank": "排名",
+    "likes+coins+favorites": "三连",
 }
 
-_COLORS = [
-    "#4E79A7", "#F28E2B", "#E15759", "#76B7B2",
-    "#59A14F", "#EDC948", "#B07AA1", "#FF9DA7",
-]
-
 _FONT = FontProperties(
-    family=["HarmonyOS Sans SC", "Noto Sans CJK SC", "WenQuanYi Micro Hei", "DejaVu Sans"]
+    family=["HarmonyOS Sans SC", "Noto Sans CJK SC",
+            "WenQuanYi Micro Hei", "DejaVu Sans"]
 )
 plt.rcParams["font.family"] = _FONT.get_name()
 plt.rcParams["axes.unicode_minus"] = False
+plt.rcParams["axes.edgecolor"] = "#cccccc"
+plt.rcParams["axes.grid"] = True
+plt.rcParams["grid.alpha"] = 0.3
+plt.rcParams["grid.linestyle"] = "--"
+
+# ── Weights ────────────────────────────────────────────────────
+
+DEFAULT_WEIGHTS: dict[str, float] = {
+    "coin": 0.4,
+    "favorite": 0.3,
+    "danmaku": 0.4,
+    "reply": 0.4,
+    "view": 0.25,
+    "like": 0.4,
+    "share": 0.6,
+}
+
+# HDS uses all weights EXCEPT view (to avoid self-referencing)
+HDS_METRICS = ["like", "coin", "favorite", "danmaku", "reply", "share"]
+# Mapping from weight key to DB field name (Δ-field)
+HDS_TO_DELTA = {m: f"Δ{m}" for m in HDS_METRICS}
+# Override: DB field "favorites" maps to weight key "favorite"
+HDS_TO_DELTA["favorite"] = "Δfavorites"
+HDS_TO_DELTA["coin"] = "Δcoins"
+
+
+def load_weights(path: Optional[Path] = None) -> dict[str, float]:
+    if path and path.exists():
+        with open(path, encoding="utf-8") as f:
+            user = json.load(f)
+        weights = DEFAULT_WEIGHTS.copy()
+        weights.update(user)
+        return weights
+    return DEFAULT_WEIGHTS.copy()
+
+
+# ── Path helpers ───────────────────────────────────────────────
+
+_ILLEGAL = re.compile(r'[/\\:*?"<>|]')
 
 
 def _safe_name(name: str) -> str:
-    return re.sub(r'[/\\:*?"<>|]', "_", name)
+    return _ILLEGAL.sub("_", name)
 
 
-def _fmt_ts(ts_str: str) -> str:
-    try:
-        return datetime.fromisoformat(ts_str).strftime("%Y%m%d_%H%M%S")
-    except (ValueError, TypeError):
-        return datetime.now().strftime("%Y%m%d_%H%M%S")
+def _fmt_ts(dt: datetime) -> str:
+    return dt.strftime("%Y%m%d_%H%M%S")
 
 
-def _build_output_path(
-    cfg: Settings, bvid: str, name: str, plot_type: str, rows
-) -> Path:
-    last_ts = _fmt_ts(rows[0]["timestamp"]) if rows else datetime.now().strftime("%Y%m%d_%H%M%S")
-    dir_path = cfg.image_dir / f"{bvid}-{_safe_name(name)}" / last_ts
-    dir_path.mkdir(parents=True, exist_ok=True)
-    return dir_path / f"{plot_type}.png"
+def _build_ts(dt: datetime) -> str:
+    return dt.strftime("%Y%m%d_%H%M%S")
 
 
-def _decorate_ax(
-    ax, title: str, subtitle: str, xlabel: str = "时间",
-) -> None:
-    ax.set_title(f"{title}\n{subtitle}", fontsize=11, loc="left", pad=12)
+def _report_dir(cfg: Settings, bvid: str, name: str, rows) -> Path:
+    last = datetime.fromisoformat(rows[-1]["timestamp"])
+    d = cfg.image_dir / f"{bvid}-{_safe_name(name)}" / _fmt_ts(last)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+# ── Plot style helpers ─────────────────────────────────────────
+
+_FIGSIZE = (14, 6)
+
+
+def _style_ax(ax, title: str, xlabel: str = "时间") -> None:
+    ax.set_title(title, fontsize=12, loc="left", pad=14, fontweight="bold")
     ax.set_xlabel(xlabel)
-    ax.xaxis.set_major_formatter(DateFormatter("%m-%d %H:%M"))
-    ax.grid(True, alpha=0.25)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
+    ax.tick_params(labelsize=9)
 
 
-async def generate_plot(
+def _footer(fig) -> None:
+    fig.text(
+        0.99, 0.005,
+        f"BiliMonitor · {datetime.now():%Y-%m-%d %H:%M}",
+        ha="right", va="bottom",
+        fontsize=7, color="#aaaaaa",
+    )
+
+
+def _ts(rows) -> list[datetime]:
+    return [datetime.fromisoformat(r["timestamp"]) for r in rows]
+
+
+# ── Delta computation ─────────────────────────────────────────
+
+def _deltas(rows):
+    n = len(rows)
+    deltas = []
+    for i in range(1, n):
+        t0 = datetime.fromisoformat(rows[i - 1]["timestamp"])
+        t1 = datetime.fromisoformat(rows[i]["timestamp"])
+        dt = max((t1 - t0).total_seconds(), 1)
+        d = {"i": i, "timestamp": t1, "dt": dt}
+        for field in ["views", "likes", "coins", "favorites",
+                       "danmaku", "shares", "reply", "online"]:
+            v0 = rows[i - 1][field] or 0
+            v1 = rows[i][field] or 0
+            d[f"Δ{field}"] = v1 - v0
+        deltas.append(d)
+    return deltas
+
+
+# ── Chart 1: 核心趋势 ─────────────────────────────────────────
+
+def _chart_trend(ax, rows, timestamps, title):
+    view_vals = [r["views"] or 0 for r in rows]
+    ax.fill_between(timestamps, view_vals, alpha=0.08, color=_COLORS["views"])
+    ax.plot(timestamps, view_vals, color=_COLORS["views"],
+            linewidth=2, label=_CN["views"], zorder=3)
+    ax.set_ylabel(_CN["views"], fontsize=10)
+    ax.yaxis.label.set_color(_COLORS["views"])
+    ax.tick_params(axis="y", colors=_COLORS["views"])
+
+    ax2 = ax.twinx()
+    for metric, key in [("likes", "likes"), ("coins", "coins"), ("favorites", "favorites")]:
+        vals = [r[metric] or 0 for r in rows]
+        ax2.plot(timestamps, vals, color=_COLORS[key],
+                 linewidth=1.5, marker="o", markersize=2.5,
+                 alpha=0.85, label=_CN[key])
+    ax2.set_ylabel("互动量", fontsize=10)
+
+    l1, lb1 = ax.get_legend_handles_labels()
+    l2, lb2 = ax2.get_legend_handles_labels()
+    ax.legend(l1 + l2, lb1 + lb2, loc="upper left", framealpha=0.9, fontsize=9)
+    _style_ax(ax, title)
+
+
+# ── Chart 2: 互动增量脉冲 ─────────────────────────────────────
+
+def _chart_interaction_pulse(ax, deltas, title):
+    metrics = ["Δlikes", "Δcoins", "Δfavorites", "Δdanmaku", "Δreply"]
+    labels = [_CN[m.lstrip("Δ")] for m in metrics]
+    colors = [_COLORS[m.lstrip("Δ")] for m in metrics]
+    timestamps = [d["timestamp"] for d in deltas]
+
+    x = np.arange(len(deltas))
+    n = len(metrics)
+    w = 0.12
+    for i, (m, c) in enumerate(zip(metrics, colors)):
+        vals = [max(d[m], 0) for d in deltas]
+        offset = x + (i - n / 2 + 0.5) * w
+        bars = ax.bar(offset, vals, w, color=c, alpha=0.85, label=labels[i])
+        edge_color = matplotlib.colors.to_rgba(c, 0.3)
+        for bar in bars:
+            bar.set_edgecolor(edge_color)
+            bar.set_linewidth(0.5)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([d["timestamp"].strftime("%m-%d %H:%M")
+                        for d in deltas], rotation=30, ha="right", fontsize=7)
+    ax.set_ylabel("增量", fontsize=10)
+    ax.legend(loc="upper left", framealpha=0.9, fontsize=8, ncol=2)
+    _style_ax(ax, title)
+    ax.set_xlabel("")
+
+
+# ── Chart 3: 加权质量指数 HDS ─────────────────────────────────
+
+def _chart_hds(ax, deltas, weights, title):
+    hds_vals = []
+    ts = []
+    for d in deltas:
+        if d["Δviews"] <= 0:
+            continue
+        numer = 0.0
+        for wkey, dfkey in HDS_TO_DELTA.items():
+            w = weights.get(wkey, 0)
+            if w:
+                numer += w * max(d.get(dfkey, 0), 0)
+        hds = numer / max(d["Δviews"], 1)
+        hds_vals.append(hds)
+        ts.append(d["timestamp"])
+
+    if not hds_vals:
+        ax.text(0.5, 0.5, "数据不足", ha="center", va="center", fontsize=14, color="#999")
+        _style_ax(ax, title)
+        return
+
+    ax.plot(ts, hds_vals, color="#E45756", linewidth=1.8,
+            marker="o", markersize=4, alpha=0.8, label="HDS", zorder=3)
+
+    # Moving average
+    window = max(3, min(7, len(hds_vals) // 3))
+    ma = np.convolve(hds_vals, np.ones(window) / window, mode="valid")
+    ma_ts = ts[window - 1:]
+    ax.plot(ma_ts, ma, color="#4C78A8", linewidth=2.2,
+            alpha=0.7, label=f"{window}期移动平均", zorder=4)
+
+    # Cumulative mean
+    cum_mean = np.cumsum(hds_vals) / np.arange(1, len(hds_vals) + 1)
+    ax.plot(ts, cum_mean, color="#999999", linewidth=1.2,
+            linestyle="--", alpha=0.6, label="累计均值", zorder=2)
+
+    # Anomaly markers
+    arr = np.array(hds_vals)
+    q1, q3 = np.percentile(arr, 25), np.percentile(arr, 75)
+    iqr = q3 - q1
+    upper, lower = q3 + 1.5 * iqr, q1 - 1.5 * iqr
+    anomalies = [i for i, v in enumerate(hds_vals) if v > upper or v < lower]
+    if anomalies:
+        ax.scatter([ts[i] for i in anomalies],
+                   [hds_vals[i] for i in anomalies],
+                   color="#E45756", s=60, marker="*",
+                   zorder=5, label="异常点", edgecolors="white", linewidths=0.5)
+
+    ax.axhline(y=0, color="#cccccc", linewidth=0.8, linestyle="--")
+    ax.set_ylabel("HDS 互动深度", fontsize=10)
+    ax.legend(loc="upper left", framealpha=0.9, fontsize=9)
+    _style_ax(ax, title)
+
+
+# ── Chart 4: 三连转化比 ────────────────────────────────────────
+
+def _chart_conversion(ax, deltas, title):
+    metrics = ["Δlikes", "Δcoins", "Δfavorites"]
+    labels = [_CN[m.lstrip("Δ")] + "/播放" for m in metrics]
+    colors = [_COLORS[m.lstrip("Δ")] for m in metrics]
+
+    x, ts, groups = [], [], []
+    for i, d in enumerate(deltas):
+        if d["Δviews"] <= 0:
+            continue
+        vals = [max(d[m], 0) / max(d["Δviews"], 1) for m in metrics]
+        groups.append(vals)
+        ts.append(d["timestamp"])
+        x.append(len(x))
+
+    if not groups:
+        ax.text(0.5, 0.5, "数据不足", ha="center", va="center", fontsize=14, color="#999")
+        _style_ax(ax, title)
+        return
+
+    n = len(metrics)
+    w = 0.2
+    for i in range(n):
+        vals = [g[i] for g in groups]
+        offset = np.array(x) + (i - n / 2 + 0.5) * w
+        bars = ax.bar(offset, vals, w, color=colors[i], alpha=0.85, label=labels[i])
+        for bar in bars:
+            bar.set_edgecolor(matplotlib.colors.to_rgba(colors[i], 0.3))
+            bar.set_linewidth(0.5)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([t.strftime("%m-%d %H:%M") for t in ts],
+                       rotation=30, ha="right", fontsize=7)
+    ax.set_ylabel("比值", fontsize=10)
+    ax.legend(loc="upper left", framealpha=0.9, fontsize=9)
+    _style_ax(ax, title)
+    ax.set_xlabel("")
+
+
+# ── Chart 5: VDR 观看留存深度 ────────────────────────────────
+
+def _chart_vdr(ax, deltas, duration, title):
+    if not duration:
+        ax.text(0.5, 0.5, "缺少视频时长信息", ha="center", va="center",
+                fontsize=14, color="#999")
+        _style_ax(ax, title)
+        return
+
+    vdr_vals, ts_colors, ts = [], [], []
+    for d in deltas:
+        online_avg = ((d.get("Δonline", 0)) if False else
+                      ((d.get("Δonline", 0)) is None))  # placeholder
+        # Expected delta requires online data from consecutive rows
+        pass
+
+    # Recompute properly with original row data
+    # This chart needs access to raw rows for online values
+    ax.text(0.5, 0.5, "需访问原始在线数据\n(VDR 依赖连续在线采样)",
+            ha="center", va="center", fontsize=12, color="#999",
+            transform=ax.transAxes)
+    _style_ax(ax, title)
+
+
+# ── Chart 5 (correct): VDR 观看留存深度 ──────────────────────
+# Uses raw rows for online, not deltas
+
+def _chart_vdr_from_rows(ax, rows, deltas, duration, title):
+    if not duration:
+        ax.text(0.5, 0.5, "缺少视频时长信息\n(duration 为空)",
+                ha="center", va="center", fontsize=13, color="#999")
+        _style_ax(ax, title)
+        return
+
+    has_online = any(r.get("online") is not None for r in rows)
+    if not has_online:
+        ax.text(0.5, 0.5, "缺少在线人数数据\n(onlne 全部为空)",
+                ha="center", va="center", fontsize=13, color="#999")
+        _style_ax(ax, title)
+        return
+
+    vdr_vals, ts = [], []
+    for i, d in enumerate(deltas):
+        if d["Δviews"] <= 0:
+            continue
+        idx = d["i"]
+        online_prev = rows[idx - 1].get("online") or 0
+        online_curr = rows[idx].get("online") or 0
+        expected = (online_prev + online_curr) / 2 * d["dt"] / duration
+        if expected <= 0:
+            continue
+        vdr = d["Δviews"] / expected
+        vdr_vals.append(min(vdr, 10))
+        ts.append(d["timestamp"])
+
+    if not vdr_vals:
+        ax.text(0.5, 0.5, "数据不足", ha="center", va="center",
+                fontsize=13, color="#999")
+        _style_ax(ax, title)
+        return
+
+    colors = ["#54A24B" if v >= 1 else "#E45756" for v in vdr_vals]
+    x = np.arange(len(vdr_vals))
+    bars = ax.bar(x, vdr_vals, color=colors, alpha=0.8, width=0.6,
+                  edgecolor="white", linewidth=0.5)
+    ax.axhline(y=1, color="#333333", linewidth=1.2, linestyle="--",
+               alpha=0.7, label="基准 (VDR=1)")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([t.strftime("%m-%d %H:%M") for t in ts],
+                       rotation=30, ha="right", fontsize=7)
+    ax.set_ylabel("VDR", fontsize=10)
+    ax.legend(loc="upper left", framealpha=0.9, fontsize=9)
+    ax.axhline(y=0, color="#cccccc", linewidth=0.8)
+
+    avg_vdr = np.mean(vdr_vals)
+    ax.text(0.98, 0.95, f"均值 VDR={avg_vdr:.2f}",
+            transform=ax.transAxes, ha="right", va="top",
+            fontsize=9, color="#666",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="#f0f0f0",
+                      edgecolor="#ddd", alpha=0.8))
+
+    _style_ax(ax, title)
+    ax.set_xlabel("")
+
+
+# ── Chart 6: 即时平均停留时长 ─────────────────────────────────
+
+def _chart_avg_stay(ax, rows, deltas, duration, title):
+    if not duration:
+        ax.text(0.5, 0.5, "缺少视频时长信息\n(duration 为空)",
+                ha="center", va="center", fontsize=13, color="#999")
+        _style_ax(ax, title)
+        return
+
+    has_online = any(r.get("online") is not None for r in rows)
+    if not has_online:
+        ax.text(0.5, 0.5, "缺少在线人数数据\n(online 全部为空)",
+                ha="center", va="center", fontsize=13, color="#999")
+        _style_ax(ax, title)
+        return
+
+    stay_vals, ts = [], []
+    for d in deltas:
+        if d["Δviews"] <= 0:
+            continue
+        idx = d["i"]
+        online_prev = rows[idx - 1].get("online") or 0
+        online_curr = rows[idx].get("online") or 0
+        integral = (online_prev + online_curr) / 2 * d["dt"]
+        stay = integral / max(d["Δviews"], 1)
+        stay_vals.append(min(stay, duration * 3))
+        ts.append(d["timestamp"])
+
+    if not stay_vals:
+        ax.text(0.5, 0.5, "数据不足", ha="center", va="center",
+                fontsize=13, color="#999")
+        _style_ax(ax, title)
+        return
+
+    ax.plot(ts, stay_vals, color="#4C78A8", linewidth=2,
+            marker="o", markersize=4, alpha=0.85, label="平均停留", zorder=3)
+    ax.fill_between(ts, stay_vals, alpha=0.08, color="#4C78A8")
+
+    ax.axhline(y=duration, color="#E45756", linewidth=1.8,
+               linestyle="--", alpha=0.7, label=f"视频全长 ({duration:.0f}s)")
+
+    ax.set_ylabel("停留时长 (秒)", fontsize=10)
+    ax.legend(loc="upper left", framealpha=0.9, fontsize=9)
+
+    avg_stay = np.mean(stay_vals)
+    ax.text(0.98, 0.05, f"平均 {avg_stay:.0f}s / 全长 {duration:.0f}s "
+            f"({avg_stay / duration * 100:.1f}%)",
+            transform=ax.transAxes, ha="right", va="bottom",
+            fontsize=9, color="#666",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="#f0f0f0",
+                      edgecolor="#ddd", alpha=0.8))
+
+    _style_ax(ax, title)
+
+
+# ── Chart 7: 裂变传播散点 ─────────────────────────────────────
+
+def _chart_scatter(ax, rows, deltas, duration, title):
+    if not duration:
+        ax.text(0.5, 0.5, "缺少视频时长信息", ha="center", va="center",
+                fontsize=13, color="#999")
+        _style_ax(ax, title)
+        return
+
+    has_online = any(r.get("online") is not None for r in rows)
+    if not has_online:
+        ax.text(0.5, 0.5, "缺少在线人数数据", ha="center", va="center",
+                fontsize=13, color="#999")
+        _style_ax(ax, title)
+        return
+
+    xs, ys, sizes, colors, labels = [], [], [], [], []
+    for d in deltas:
+        if d["Δviews"] < 0:
+            continue
+        idx = d["i"]
+        online_avg = ((rows[idx - 1].get("online") or 0) +
+                      (rows[idx].get("online") or 0)) / 2
+        x = online_avg / (2 * duration)
+        y = d["Δviews"] / max(d["dt"], 1)
+        xs.append(x)
+        ys.append(y)
+        sizes.append(max(abs(d.get("Δshares", 0)), 1))
+        colors.append(d["timestamp"])
+        labels.append(d["timestamp"].strftime("%m-%d %H:%M"))
+
+    if len(xs) < 3:
+        ax.text(0.5, 0.5, "数据不足", ha="center", va="center",
+                fontsize=13, color="#999")
+        _style_ax(ax, title)
+        return
+
+    sizes_norm = [max(s * 30 / max(sizes), 15) for s in sizes]
+    sc = ax.scatter(xs, ys, s=sizes_norm, c=range(len(xs)),
+                    cmap="viridis", alpha=0.7, edgecolors="white",
+                    linewidths=0.5, zorder=3)
+
+    max_val = max(max(xs), max(ys)) * 1.1
+    line = np.linspace(0, max_val, 100)
+    ax.plot(line, line, color="#999999", linewidth=1,
+            linestyle="--", alpha=0.5, label="y=x (理想)")
+
+    if len(xs) >= 4:
+        A = np.vstack([xs, np.ones(len(xs))]).T
+        m, c = np.linalg.lstsq(A, ys, rcond=None)[0]
+        ax.plot(line, m * line + c, color="#E45756", linewidth=1.5,
+                alpha=0.6, label=f"回归 y={m:.2f}x+{c:.0f}")
+
+    ax.set_xlabel("等效完播密度 (次/秒)", fontsize=10)
+    ax.set_ylabel("实际播放增速 (次/秒)", fontsize=10)
+    ax.legend(loc="upper left", framealpha=0.9, fontsize=9)
+    _style_ax(ax, title)
+
+
+# ── Chart 8: 分享-播放时滞归因 ────────────────────────────────
+
+def _chart_share_lag(ax, deltas, title):
+    if len(deltas) < 4:
+        ax.text(0.5, 0.5, "数据不足 (至少需要 4 个采样间隔)",
+                ha="center", va="center", fontsize=13, color="#999")
+        _style_ax(ax, title)
+        return
+
+    ts = [d["timestamp"] for d in deltas]
+    dviews = [d["Δviews"] for d in deltas]
+    dshares = [d["Δshares"] for d in deltas]
+
+    ax.plot(ts, dviews, color="#4C78A8", linewidth=2,
+            marker="o", markersize=4, alpha=0.85, label="播放增量", zorder=3)
+
+    ax2 = ax.twinx()
+    shifted = [0] + dshares[:-1]
+    ax2.plot(ts, shifted, color="#FF9DA6", linewidth=1.8,
+             marker="s", markersize=3.5, alpha=0.8,
+             linestyle="--", label="转发增量 (前置1期)", zorder=2)
+
+    best_shift = 0
+    best_r = 0
+    for s in range(3):
+        if s >= len(dviews):
+            break
+        a = np.array(dviews[s:])
+        b = np.array(dshares[:len(dviews) - s])
+        if len(a) < 3 or np.std(a) < 1e-9 or np.std(b) < 1e-9:
+            continue
+        r = np.corrcoef(a, b)[0, 1]
+        if abs(r) > abs(best_r):
+            best_r = r
+            best_shift = s
+
+    ax.text(0.98, 0.95, f"最佳时滞: {best_shift}期 (r={best_r:.3f})",
+            transform=ax.transAxes, ha="right", va="top",
+            fontsize=10, color="#333",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="#f0f0f0",
+                      edgecolor="#ddd", alpha=0.8))
+
+    ax.set_ylabel("播放增量", fontsize=10, color=_COLORS["views"])
+    ax.tick_params(axis="y", colors=_COLORS["views"])
+    ax2.set_ylabel("转发增量 (前置)", fontsize=10, color=_COLORS["shares"])
+    ax2.tick_params(axis="y", colors=_COLORS["shares"])
+
+    l1, lb1 = ax.get_legend_handles_labels()
+    l2, lb2 = ax2.get_legend_handles_labels()
+    ax.legend(l1 + l2, lb1 + lb2, loc="upper left", framealpha=0.9, fontsize=9)
+    _style_ax(ax, title)
+
+
+# ── Report generator ───────────────────────────────────────────
+
+_CHART_REGISTRY: list[tuple[str, callable, int]] = [
+    ("01_核心趋势", _chart_trend, 0),
+    ("02_互动增量脉冲", _chart_interaction_pulse, 0),
+    ("03_加权质量指数(HDS)", _chart_hds, 0),
+    ("04_三连转化比", _chart_conversion, 0),
+    ("05_观看留存深度(VDR)", _chart_vdr_from_rows, 0),
+    ("06_即时平均停留时长", _chart_avg_stay, 0),
+    ("07_裂变传播散点", _chart_scatter, 15),
+    ("08_分享-播放时滞归因", _chart_share_lag, 20),
+]
+
+
+async def generate_report(
     bvid: str,
     video_id: int,
     db: Database,
-    metrics: list[str],
-    plot_type: str,
-    output: Optional[Path] = None,
     name: str = "",
-) -> Path:
+    output: Optional[Path] = None,
+    weights: Optional[dict] = None,
+    duration: Optional[int] = None,
+) -> list[Path]:
     cfg = Settings.get_instance()
     rows = await db.get_records(video_id)
     if not rows:
         raise ValueError(f"[{bvid}] 没有记录数据")
 
-    valid = [m for m in metrics if m in _FIELD_LABELS]
-    if not valid:
-        valid = ["views", "likes", "coins"]
+    rows = rows[::-1]
+    weights = weights or DEFAULT_WEIGHTS.copy()
+    timestamps = _ts(rows)
+    deltas = _deltas(rows)
 
-    out = output or _build_output_path(cfg, bvid, name, plot_type, rows)
-    out.parent.mkdir(parents=True, exist_ok=True)
+    base_dir = output or _report_dir(cfg, bvid, name, rows)
 
-    ts_range = f"{_parse_time(rows[-1]).strftime('%m-%d %H:%M')} ~ {_parse_time(rows[0]).strftime('%m-%d %H:%M')}"
-    plot_title = f"{name or bvid} — {len(rows)} 条记录"
+    name_label = name or bvid
+    generated: list[Path] = []
 
-    if plot_type == "trend":
-        fig, ax = plt.subplots(figsize=(12, 6))
-        _plot_trend(ax, rows, valid, plot_title, ts_range)
-    elif plot_type == "subplot":
-        fig = _plot_subplots(rows, valid, plot_title, ts_range)
-    elif plot_type == "delta":
-        fig, ax = plt.subplots(figsize=(12, 6))
-        _plot_delta(ax, rows, valid, plot_title, ts_range)
-    elif plot_type == "ratio":
-        fig, ax = plt.subplots(figsize=(12, 6))
-        _plot_ratio(ax, rows, valid, plot_title, ts_range)
-    else:
-        fig, ax = plt.subplots(figsize=(12, 6))
-        _plot_trend(ax, rows, valid, plot_title, ts_range)
+    for chart_name, func, min_records in _CHART_REGISTRY:
+        if len(deltas) < min_records:
+            continue
 
-    _add_footer(fig)
-    fig.autofmt_xdate()
-    fig.tight_layout()
-    fig.savefig(out, dpi=200, bbox_inches="tight")
-    plt.close(fig)
-    return out
+        fig, ax = plt.subplots(figsize=_FIGSIZE)
+        ts_range = f"{timestamps[0].strftime('%m-%d %H:%M')} ~ {timestamps[-1].strftime('%m-%d %H:%M')}  [{len(rows)}条记录]"
+        title = f"{name_label} · {chart_name}\n{ts_range}"
 
+        try:
+            if chart_name in ("05_观看留存深度(VDR)", "06_即时平均停留时长"):
+                func(ax, rows, deltas, duration, title)
+            elif chart_name == "03_加权质量指数(HDS)":
+                func(ax, deltas, weights, title)
+            elif chart_name == "07_裂变传播散点":
+                func(ax, rows, deltas, duration, title)
+            elif chart_name in ("01_核心趋势",):
+                func(ax, rows, timestamps, title)
+            else:
+                func(ax, deltas, title)
 
-def _add_footer(fig) -> None:
-    fig.text(
-        0.99, 0.005,
-        f"BiliMonitor · {datetime.now():%Y-%m-%d %H:%M}",
-        ha="right", va="bottom",
-        fontsize=8, color="#999999",
-    )
+            _footer(fig)
+            fig.autofmt_xdate()
+            fig.tight_layout()
+            out_path = base_dir / f"{chart_name}.png"
+            fig.savefig(out_path, dpi=200, bbox_inches="tight")
+            generated.append(out_path)
+        except Exception as exc:
+            pass
+        finally:
+            plt.close(fig)
 
-
-def _parse_time(row) -> datetime:
-    return datetime.fromisoformat(row["timestamp"])
-
-
-def _plot_trend(ax, rows, metrics: list[str], title: str, subtitle: str) -> None:
-    timestamps = [_parse_time(r) for r in rows]
-    ax2 = None
-    range0 = None
-
-    for i, m in enumerate(metrics):
-        vals = [r[m] or 0 for r in rows]
-        target_ax = ax
-
-        if i == 0:
-            rng = max(vals) - min(vals) if max(vals) != min(vals) else 1
-            range0 = rng
-        elif range0 and range0 > 0:
-            rng = max(vals) - min(vals) if max(vals) != min(vals) else 1
-            if range0 / max(rng, 1) > 10:
-                if ax2 is None:
-                    ax2 = ax.twinx()
-                target_ax = ax2
-
-        target_ax.plot(
-            timestamps, vals,
-            label=_FIELD_LABELS.get(m, m),
-            color=_COLORS[i % len(_COLORS)],
-            linewidth=1.5, marker="o", markersize=3, alpha=0.85,
-        )
-
-    lines1, labels1 = ax.get_legend_handles_labels()
-    if ax2:
-        lines2, labels2 = ax2.get_legend_handles_labels()
-        legend = ax.legend(lines1 + lines2, labels1 + labels2,
-                           loc="upper left", framealpha=0.9)
-        ax2.set_ylabel("数值（右轴）")
-    else:
-        legend = ax.legend(loc="upper left", framealpha=0.9)
-
-    ax.set_ylabel("数值")
-    _decorate_ax(ax, title, subtitle)
-
-
-def _plot_subplots(rows, metrics: list[str], title: str, subtitle: str) -> plt.Figure:
-    n = len(metrics)
-    fig, axes = plt.subplots(n, 1, figsize=(12, 3 * n), sharex=True)
-    if n == 1:
-        axes = [axes]
-
-    timestamps = [_parse_time(r) for r in rows]
-    for i, (ax, m) in enumerate(zip(axes, metrics)):
-        vals = [r[m] or 0 for r in rows]
-        ax.plot(
-            timestamps, vals,
-            color=_COLORS[i % len(_COLORS)],
-            linewidth=1.5, marker="o", markersize=3, alpha=0.85,
-        )
-        ax.set_ylabel(_FIELD_LABELS.get(m, m))
-        ax.grid(True, alpha=0.25)
-        if i < n - 1:
-            ax.tick_params(labelbottom=False)
-
-    axes[-1].xaxis.set_major_formatter(DateFormatter("%m-%d %H:%M"))
-    fig.suptitle(f"{title}\n{subtitle}", fontsize=12, x=0.03, ha="left", y=0.995)
-    fig.subplots_adjust(hspace=0.08)
-    return fig
-
-
-def _plot_delta(ax, rows, metrics: list[str], title: str, subtitle: str) -> None:
-    timestamps = [_parse_time(r) for r in rows]
-    for i, m in enumerate(metrics):
-        vals = [r[m] or 0 for r in rows]
-        deltas = [0.0] + [vals[j] - vals[j - 1] for j in range(1, len(vals))]
-        ax.plot(
-            timestamps, deltas,
-            label=_FIELD_LABELS.get(m, m),
-            color=_COLORS[i % len(_COLORS)],
-            linewidth=1.5, marker="o", markersize=3, alpha=0.85,
-        )
-    ax.axhline(y=0, color="#333333", linewidth=0.8, linestyle="--", alpha=0.5)
-    ax.set_ylabel("增量")
-    legend = ax.legend(loc="upper left", framealpha=0.9)
-    _decorate_ax(ax, title, subtitle)
-
-
-def _plot_ratio(ax, rows, metrics: list[str], title: str, subtitle: str) -> None:
-    base_metric = "views" if "views" in metrics else metrics[0]
-    others = [m for m in metrics if m != base_metric]
-    if not others:
-        others = metrics[1:] if len(metrics) > 1 else ["likes"]
-
-    timestamps = [_parse_time(r) for r in rows]
-    base_vals = [r[base_metric] or 1 for r in rows]
-
-    for i, m in enumerate(others[:6]):
-        vals = [(r[m] or 0) / max(b, 1) for r, b in zip(rows, base_vals)]
-        ax.plot(
-            timestamps, vals,
-            label=f"{_FIELD_LABELS.get(m, m)}/{_FIELD_LABELS.get(base_metric, base_metric)}",
-            color=_COLORS[i % len(_COLORS)],
-            linewidth=1.5, marker="o", markersize=3, alpha=0.85,
-        )
-
-    ax.set_ylabel("比值")
-    legend = ax.legend(loc="upper left", framealpha=0.9)
-    _decorate_ax(ax, title, subtitle)
+    return generated

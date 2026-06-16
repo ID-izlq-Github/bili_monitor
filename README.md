@@ -28,7 +28,7 @@
 | **数据导出** | CSV / JSON 一键导出（含 bvid 列，便于导入） |
 | **数据导入** | CSV / JSON 一键导入，自动去重，支持覆盖和预览 |
 | **发布基线** | 自动记录视频发布时间，7 天内新视频插入全 0 基线记录 |
-| **可视化** | 4 种图表类型：趋势(自动双轴)、独立子图、增量、比值；`--all` 一次生成全套 |
+| **可视化** | `viz` 一键生成 8 张分析图：核心趋势、互动脉冲、质量指数、三连转化、观看留存(VDR)、平均停留、裂变散点、时滞归因；支持自定义权重 |
 | **守护进程** | Linux 后台运行，PID 文件管理 + SIGUSR1 实时通知 |
 | **自动停启** | `create` 自动激活并启动 daemon；停用最后任务自动关 daemon |
 | **自动提醒** | 数据超 180 天或 DB 超 30MB 时提示清理 |
@@ -91,11 +91,11 @@ python -m bili_monitor snap rick
 # 所有活跃任务各记录一次
 python -m bili_monitor snap --all
 
-# 生成可视化
-python -m bili_monitor viz rick --metrics views,likes,coins --type trend
-python -m bili_monitor viz rick --type subplot    # 独立Y轴
-python -m bili_monitor viz rick --type delta       # 增量图
-python -m bili_monitor viz rick --all              # 全部类型
+# 生成可视化报告（一次性输出所有图表）
+python -m bili_monitor viz rick
+
+# 自定义权重
+python -m bili_monitor viz rick --weights my_weights.json
 
 # 查看守护进程状态
 python -m bili_monitor daemon status
@@ -224,7 +224,7 @@ python -m bili_monitor import <文件路径> --bvid <BV号> [选项]
 - 按 `(video_id, timestamp)` 去重
 - 文件内 `bvid` 列与命令行 `--bvid` 不匹配时报错
 
-### `viz` — 可视化
+### `viz` — 可视化报告
 
 ```
 python -m bili_monitor viz <别名|BV号> [选项]
@@ -232,18 +232,36 @@ python -m bili_monitor viz <别名|BV号> [选项]
 
 | 参数 | 说明 | 默认 |
 |------|------|------|
-| `-m, --metrics` | 指标列表（逗号分隔） | views,likes,coins |
-| `-t, --type` | 图表类型：`trend` / `subplot` / `delta` / `ratio` | trend |
-| `-a, --all` | 生成所有类型的图表 | 不设 |
+| `-o, --output` | 自定义输出目录 | `output/image/{bvid}-{name}/{ts}/` |
+| `-w, --weights` | 权重 JSON（局部覆盖） | 内置默认 |
 
-图表说明：
-- **trend** — 趋势折线图，量级差 >10x 时自动启用双 Y 轴
-- **subplot** — 每个指标独占一个子图，独立 Y 轴（解决量级差距问题）
-- **delta** — 相邻记录绝对增量，显示增长趋势
-- **ratio** — 各指标对基准指标（默认播放量）的比值
+> 一次性生成所有可用图表，数据充足度自动决定哪些图。
 
-输出路径：`output/image/{BV号}-{别名}/{最后记录时间}/{类型}.png`
-- 同批次数据自动归组到同一时间目录，重复生成直接覆盖
+输出清单：
+
+```
+{bvid}-{name}/{last_ts}/
+├── 01_核心趋势.png         播放量 + 互动量双轴趋势
+├── 02_互动增量脉冲.png     各互动指标增量分组柱
+├── 03_加权质量指数(HDS).png 互动深度评分 + 移动平均
+├── 04_三连转化比.png       点赞/投币/收藏 ÷ 播放
+├── 05_观看留存深度(VDR).png 实际 vs 期望播放留存
+├── 06_即时平均停留时长.png 单次访问平均观看时长
+├── 07_裂变传播散点.png     播放增速 vs 完播密度 (≥15条)
+└── 08_分享-播放时滞归因.png 分享前置与播放关联 (≥20条)
+```
+
+内置热度权重（HDS 公式）：
+
+| 投币 | 弹幕 | 评论 | 分享 | 点赞 | 收藏 |
+|------|------|------|------|------|------|
+| 0.4  | 0.4  | 0.4  | 0.6  | 0.4  | 0.3  |
+
+通过 `--weights weights.json` 局部覆盖，未指定的字段沿用默认值：
+
+```json
+{ "coin": 0.5, "like": 0.3 }
+```
 
 ---
 
@@ -277,7 +295,7 @@ export BILI_DATA_DIR=/path/to/data
 | API 封装 | [bilibili-api-python](https://github.com/Passkou/bilibili-api-python) | Bilibili 数据接口 |
 | 异步 HTTP | [aiohttp](https://github.com/aio-libs/aiohttp) | (库内部) TCP 连接池 |
 | 数据库 | SQLite3 (stdlib) | 零依赖嵌入式存储 |
-| 可视化 | [matplotlib](https://github.com/matplotlib/matplotlib) + [seaborn](https://github.com/mwaskom/seaborn) | 趋势图 / 比值图 |
+| 可视化 | [matplotlib](https://github.com/matplotlib/matplotlib) | 8 种分析图表：趋势/脉冲/质量指数/转化/VDR/停留/散点/时滞 |
 | 日志 | logging (stdlib) | 标准日志模块 |
 | 任务调度 | 自研 async tick loop | 轻量可控，无外部依赖 |
 
@@ -333,7 +351,6 @@ bili_monitor/
 - [bilibili-api-python](https://github.com/Passkou/bilibili-api-python) — Bilibili API Python 封装
 - [aiohttp](https://github.com/aio-libs/aiohttp) — 高性能异步 HTTP
 - [matplotlib](https://github.com/matplotlib/matplotlib) — 经典可视化库
-- [seaborn](https://github.com/mwaskom/seaborn) — 统计数据可视化
 
 ---
 

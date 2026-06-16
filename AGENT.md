@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-Bilibili 视频数据监控 CLI 工具。多视频并发监控（序列化请求避免并发）、SQLite 存储、CSV/JSON 导入导出、matplotlib/seaborn 可视化、可选守护进程。
+Bilibili 视频数据监控 CLI 工具。多视频并发监控（序列化请求避免并发）、SQLite 存储、CSV/JSON 导入导出、matplotlib 可视化、可选守护进程。
 
 ## 架构概览
 
@@ -21,7 +21,7 @@ Bilibili 视频数据监控 CLI 工具。多视频并发监控（序列化请求
        ├──▶ db/database.py  ──▶ sqlite3 (WAL, 别名查询, 迁移)
        ├──▶ data_import/    ──▶ csv/json 导入
        ├──▶ export/         ──▶ csv/json 导出
-       └──▶ viz/            ──▶ matplotlib + seaborn → output/image/
+        └──▶ viz/            ──▶ matplotlib → output/image/
 ```
 
 ## 目录结构
@@ -129,7 +129,7 @@ CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
 - `list`：列出所有任务（含发布时间、分区、时长列）
 - `export <bvid/name> [--format csv|json] [--output PATH]`：导出数据（含 bvid 列）
 - `import <file> --bvid <BV> [--format] [--dry-run] [--overwrite]`：导入 CSV/JSON 数据
-- `viz <bvid/name> [--metrics ...] [--type trend|ratio]`：生成可视化
+- `viz <bvid/name> [--weights FILE] [--output DIR]`：生成可视化报告
 - `daemon status`：查看守护进程状态
 
 ### `api/client.py` — Bilibili API 封装
@@ -165,15 +165,20 @@ CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
 
 ### `viz/plots.py` — 可视化
 - matplotlib (Agg backend)，保存到 `output/image/`
-- 4 种图表类型：
-  - `trend` — 趋势图，量级差 >10x 时自动 `twinx()` 双 Y 轴
-  - `subplot` — 各指标独立 subplot，彻底解决量级差距问题
-  - `delta` — 相邻记录绝对增量图，带零线参考
-  - `ratio` — 比值图，自动选基准指标（优先 views）
-- 输出路径：`{image_dir}/{bvid}-{name}/{last_ts}/{type}.png`
-  - `last_ts` 取最后一条数据时间，同批次自动归组
-- 美化：Tableau 10 色板、圆点标记、标题含记录数、页脚生成时间戳
-- CLI 支持 `--all` 一次生成所有类型
+- 单命令 `bili-monitor viz <name>` 一次性生成 8 张分析图表
+- 数据充足度自动决定生成范围（≥15 条出散点图，≥20 条出时滞图）
+- 输出路径：`{image_dir}/{bvid}-{name}/{last_ts}/`
+- 8 张图表：
+  1. **核心趋势** — 播放量(面积) + 互动量(双轴折线)
+  2. **互动增量脉冲** — Δlike/Δcoin/Δfavorite/Δdanmaku/Δreply 分组柱
+  3. **加权质量指数(HDS)** — 加权互动深度 + 移动平均 + 异常检测
+  4. **三连转化比** — 点赞/投币/收藏 ÷ 播放 分组柱
+  5. **观看留存深度(VDR)** — 基于在线人数的实际 vs 期望播放比
+  6. **即时平均停留时长** — 平均观看秒数 + 视频全长红线
+  7. **裂变传播散点** — 播放增速 vs 完播密度，含回归线
+  8. **分享-播放时滞归因** — 错位相关分析，自动计算最佳偏移
+- 内置热度权重 + 可外部 JSON 覆盖
+- 美化：专业配色、页脚时间戳、异常点星标、统计信息标注框
 
 ### `daemon/daemon.py` — 守护进程
 - Linux：`os.fork()` + PID 文件
@@ -200,10 +205,8 @@ $ python -m bili_monitor export myvideo --format csv
 $ python -m bili_monitor import data.csv --bvid BV1xx
 
 # 可视化
-$ python -m bili_monitor viz myvideo --metrics views,likes --type trend
-$ python -m bili_monitor viz myvideo --type subplot     # 独立Y轴
-$ python -m bili_monitor viz myvideo --type delta        # 增量图
-$ python -m bili_monitor viz myvideo --all               # 全类型
+$ python -m bili_monitor viz myvideo
+$ python -m bili_monitor viz myvideo --weights my_weights.json
 
 # 立即记录
 $ python -m bili_monitor snap myvideo
@@ -238,7 +241,7 @@ $ python -m bili_monitor daemon status
 | CLI 框架 | typer | 已有、类型安全、自动 --help |
 | 进程 | `python -m bili_monitor` | 用户要求，src layout 原生支持 |
 | 登录 | 不支持 | 用户确认，公开 API 即可 |
-| 可视化 | 保存文件到 output/image/ | 4 类型 (trend/subplot/delta/ratio)，Agg 后端 |
+| 可视化 | 保存文件到 output/image/ | 8 类型 (report 模式)，Agg 后端 |
 | 守护进程 | fork + PID file（首选 Linux） | 简单可靠 |
 | 配置变更通知 | SIGUSR1 | CLI 直接 kill 发信号，零 IPC 依赖 |
 
