@@ -9,7 +9,7 @@
 
 <p align="center">
   <b>Bilibili 视频数据监控 CLI 工具</b><br>
-  定时采集视频数据 · SQLite 存储 · 终端面板管理 · 数据导出 · 可视化
+  定时采集视频数据 · SQLite 存储 · 数据导入导出 · 可视化
 </p>
 
 ---
@@ -20,11 +20,13 @@
 |------|------|
 | **视频监控** | 给定 BV 号或视频 URL，定时记录播放量、点赞、投币、收藏、弹幕、在线人数等 |
 | **别名系统** | 每个视频绑定唯一别名，后续全部用别名操作，告别 BV 号 |
-| **灵活间隔** | 30s ~ 1h 可配置，默认 5min |
+| **灵活间隔** | 30s 起，不设上限（>3600s 时二次确认），默认 15min |
 | **多任务并发** | 最多 5 个任务，所有网络请求串行（绝不并发） |
 | **记录查看** | `show` 命令终端直接查看最近记录，无需导文件 |
 | **SQLite 存储** | 零配置，自动建表，WAL 模式 |
-| **数据导出** | CSV / JSON 一键导出 |
+| **数据导出** | CSV / JSON 一键导出（含 bvid 列，便于导入） |
+| **数据导入** | CSV / JSON 一键导入，自动去重，支持覆盖和预览 |
+| **发布基线** | 自动记录视频发布时间，7 天内新视频插入全 0 基线记录 |
 | **可视化** | matplotlib + seaborn 趋势图/比值图，自动保存 |
 | **守护进程** | Linux 后台运行，PID 文件管理 + SIGUSR1 实时通知 |
 | **自动停启** | `create` 自动激活并启动 daemon；停用最后任务自动关 daemon |
@@ -55,11 +57,8 @@ pip install -e .
 # 查看帮助
 python -m bili_monitor --help
 
-# 注册新视频
-python -m bili_monitor create BV1GJ411x7h7 --name rick --interval 300
-
-# 已注册的视频直接激活
-python -m bili_monitor start rick
+# 注册新视频（自动激活 + 启动守护进程）
+python -m bili_monitor create BV1GJ411x7h7 --name rick
 
 # 查看记录
 python -m bili_monitor show rick --last 5
@@ -82,6 +81,9 @@ python -m bili_monitor start
 # 导出数据
 python -m bili_monitor export rick --format csv
 
+# 导入数据
+python -m bili_monitor import data.csv --bvid BV1GJ411x7h7
+
 # 生成可视化
 python -m bili_monitor viz rick --metrics views,likes,coins --type trend
 
@@ -96,16 +98,21 @@ python -m bili_monitor daemon status
 ### `create` — 注册新视频
 
 ```
-python -m bili_monitor create <BV号/URL> --name <别名> [选项]
+python -m bili_monitor create <BV号/URL> [选项]
 ```
 
 参数：
 | 参数 | 说明 | 默认 |
 |------|------|------|
 | `BV号或URL` | 支持 `BV1xx` 或完整视频链接 | **必填** |
-| `-n, --name` | 别名（后续用别名操作，必须且唯一） | **必填** |
-| `-i, --interval` | 记录间隔（秒） | 300 |
+| `-n, --name` | 别名（后续用别名操作） | 自动生成 `bili_HHMMSS` |
+| `-i, --interval` | 记录间隔（秒）；>3600 时二次确认 | 900 |
 | `--inactive` | 创建后不自动激活 | 不设 |
+
+行为：
+- 自动获取视频标题、UP主、发布时间
+- 发布时间在 7 天内的视频自动插入发布时全 0 基线记录（所有统计字段为 0）
+- 默认自动激活并启动守护进程
 
 支持 URL 格式：
 ```
@@ -149,7 +156,7 @@ python -m bili_monitor update <别名|BV号> [选项]
 | 参数 | 说明 |
 |------|------|
 | `-n, --name` | 新别名 |
-| `-i, --interval` | 新记录间隔（秒） |
+| `-i, --interval` | 新记录间隔（秒）；>3600 时二次确认 |
 
 > 仅修改参数，不影响任务的 active 状态。修改后通过 SIGUSR1 立即通知守护进程。
 
@@ -173,6 +180,26 @@ python -m bili_monitor export <BV号> [选项]
 |------|------|------|
 | `-f, --format` | `csv` 或 `json` | csv |
 | `-o, --output` | 输出路径 | 自动生成 |
+
+导出文件含 `bvid` 列，可直接用于 `import` 命令。
+
+### `import` — 数据导入
+
+```
+python -m bili_monitor import <文件路径> --bvid <BV号> [选项]
+```
+
+| 参数 | 说明 | 默认 |
+|------|------|------|
+| `文件路径` | CSV 或 JSON 文件 | **必填** |
+| `-b, --bvid` | 目标视频 BV 号 | **必填** |
+| `-f, --format` | 文件格式（默认从扩展名推断） | 自动 |
+| `-n, --dry-run` | 仅预览，不写入 | 不设 |
+| `-o, --overwrite` | 覆盖已存在的记录（默认跳过） | 不设 |
+
+行为：
+- 按 `(video_id, timestamp)` 去重
+- 文件内 `bvid` 列与命令行 `--bvid` 不匹配时报错
 
 ### `viz` — 可视化
 
@@ -203,8 +230,7 @@ export BILI_DATA_DIR=/path/to/data
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | 最小间隔 | 30s | — |
-| 最大间隔 | 3600s | — |
-| 默认间隔 | 300s | — |
+| 默认间隔 | 900s（15 分钟） | 不设上限，>3600s 时二次确认 |
 | 最大任务数 | 5 | — |
 | DB 提醒阈值 | 30MB | 超出提示清理 |
 | 数据保留天数 | 180 天 | 超出提示清理 |
@@ -216,13 +242,12 @@ export BILI_DATA_DIR=/path/to/data
 | 层级 | 技术 | 用途 |
 |------|------|------|
 | CLI 框架 | [typer](https://github.com/fastapi/typer) | 命令解析，类型安全 |
-| 终端 UI | [rich](https://github.com/Textualize/rich) | 交互面板，表格渲染 |
+| 终端 UI | [rich](https://github.com/Textualize/rich) | 表格渲染 |
 | API 封装 | [bilibili-api-python](https://github.com/Passkou/bilibili-api-python) | Bilibili 数据接口 |
 | 异步 HTTP | [aiohttp](https://github.com/aio-libs/aiohttp) | (库内部) TCP 连接池 |
 | 数据库 | SQLite3 (stdlib) | 零依赖嵌入式存储 |
 | 可视化 | [matplotlib](https://github.com/matplotlib/matplotlib) + [seaborn](https://github.com/mwaskom/seaborn) | 趋势图 / 比值图 |
-| 数据处理 | [pandas](https://github.com/pandas-dev/pandas) | (预留) 数据聚合 |
-| 日志 | [loguru](https://github.com/Delgan/loguru) | 结构化日志 |
+| 日志 | logging (stdlib) | 标准日志模块 |
 | 任务调度 | 自研 async tick loop | 轻量可控，无外部依赖 |
 
 ---
@@ -234,21 +259,26 @@ bili_monitor/
 ├── pyproject.toml              # 项目元数据 & 依赖
 ├── src/bili_monitor/
 │   ├── __main__.py             # python -m 入口
-│   ├── cli.py                  # typer 命令定义
+│   ├── cli.py                  # typer 命令定义（11 子命令）
 │   ├── config.py               # 配置 & 环境变量
 │   ├── api/client.py           # Bilibili API 封装 (Semaphore 串行)
 │   ├── core/scheduler.py       # 异步调度器 & 状态管理
 │   ├── db/
 │   │   ├── models.py           # 数据模型 & SQL
 │   │   └── database.py         # SQLite (WAL, async-safe)
-│   ├── ui/                     # （已移除，功能整合至 CLI）
+│   ├── data_import/
+│   │   └── importer.py         # CSV/JSON 导入逻辑
 │   ├── export/exporter.py      # CSV/JSON 导出
 │   ├── viz/plots.py            # matplotlib 可视化
 │   └── daemon/daemon.py        # Linux 守护进程
+├── test/
+│   ├── test_parse_count.py     # _parse_count 单元测试
+│   └── test_import_export.py   # 导入导出回环测试
 ├── output/
 │   ├── image/                  # 可视化输出
 │   └── export/                 # 导出文件
-└── AGENT.md                    # 项目架构指南
+├── AGENT.md                    # 项目架构指南
+└── README.md
 ```
 
 ---
@@ -273,9 +303,6 @@ bili_monitor/
 - [aiohttp](https://github.com/aio-libs/aiohttp) — 高性能异步 HTTP
 - [matplotlib](https://github.com/matplotlib/matplotlib) — 经典可视化库
 - [seaborn](https://github.com/mwaskom/seaborn) — 统计数据可视化
-- [pandas](https://github.com/pandas-dev/pandas) — 数据处理基础
-- [loguru](https://github.com/Delgan/loguru) — Python 日志最佳实践
-- [APScheduler](https://github.com/agronholm/apscheduler) — (库依赖) 任务调度
 
 ---
 

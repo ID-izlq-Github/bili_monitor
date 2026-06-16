@@ -2,14 +2,14 @@
 
 ## 项目概述
 
-Bilibili 视频数据监控 CLI 工具。多视频并发监控（序列化请求避免并发）、SQLite 存储、CSV/JSON 导出、matplotlib/seaborn 可视化、可选守护进程。
+Bilibili 视频数据监控 CLI 工具。多视频并发监控（序列化请求避免并发）、SQLite 存储、CSV/JSON 导入导出、matplotlib/seaborn 可视化、可选守护进程。
 
 ## 架构概览
 
 ```
-┌─────────────┐  typer CLI（10 子命令, 内置 --install-completion）
+┌─────────────┐  typer CLI（11 子命令, 内置 --install-completion）
 │   cli.py    │  create / delete / start / stop / update / show
-└──────┬──────┘  list / export / viz / daemon status
+└──────┬──────┘  list / export / import / viz / daemon status
        │
        ▼
 ┌──────────────┐  SIGUSR1 实时 reload
@@ -19,7 +19,8 @@ Bilibili 视频数据监控 CLI 工具。多视频并发监控（序列化请求
        │
        ├──▶ api/client.py   ──▶ bilibili-api-python (HTTP)
        ├──▶ db/database.py  ──▶ sqlite3 (WAL, 别名查询, 迁移)
-       ├──▶ export/         ──▶ csv/json
+       ├──▶ data_import/    ──▶ csv/json 导入
+       ├──▶ export/         ──▶ csv/json 导出
        └──▶ viz/            ──▶ matplotlib + seaborn → output/image/
 ```
 
@@ -31,7 +32,7 @@ bilibili_record/
 │   └── bili_monitor/
 │       ├── __init__.py
 │       ├── __main__.py              # python -m bili_monitor
-│       ├── cli.py                   # typer CLI 入口
+│       ├── cli.py                   # typer CLI 入口（11 子命令）
 │       ├── config.py                # 全局配置、常量
 │       ├── api/
 │       │   ├── __init__.py
@@ -43,7 +44,9 @@ bilibili_record/
 │       │   ├── __init__.py
 │       │   ├── database.py          # SQLite 操作
 │       │   └── models.py            # 数据模型/常量
-│       ├── ui/                     # （已移除，功能整合至 CLI）
+│       ├── data_import/
+│       │   ├── __init__.py
+│       │   └── importer.py          # CSV/JSON 导入逻辑
 │       ├── export/
 │       │   ├── __init__.py
 │       │   └── exporter.py          # CSV/JSON 导出
@@ -53,11 +56,16 @@ bilibili_record/
 │       └── daemon/
 │           ├── __init__.py
 │           └── daemon.py            # 守护进程管理
+├── test/
+│   ├── __init__.py
+│   ├── test_parse_count.py
+│   └── test_import_export.py
 ├── output/
 │   ├── image/                       # 可视化图片输出
-│   └── export/                      # 导出文件输出 (可选)
+│   └── export/                      # 导出文件输出
 ├── pyproject.toml
-└── AGENT.md
+├── AGENT.md
+└── README.md
 ```
 
 包名 `bili_monitor`，通过 `python -m bili_monitor` 直接运行。
@@ -68,26 +76,34 @@ bilibili_record/
 -- 视频元信息
 videos (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    bvid        TEXT UNIQUE NOT NULL,      -- BV号
-    title       TEXT NOT NULL,             -- 视频名称
-    uploader    TEXT NOT NULL,             -- UP主
-    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    active      INTEGER DEFAULT 1          -- 是否活跃监控中
+    bvid        TEXT UNIQUE NOT NULL,          -- BV号
+    name        TEXT UNIQUE NOT NULL,          -- 别名 (用于 CLI 操作)
+    title       TEXT NOT NULL,                 -- 视频标题
+    uploader    TEXT NOT NULL,                 -- UP主
+    created_at  TEXT DEFAULT (datetime('now','localtime')),
+    active      INTEGER DEFAULT 0,             -- 是否活跃监控中
+    pubdate     TEXT                           -- 发布时间 (ISO, nullable)
 )
 
 -- 时间序列记录
 records (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    video_id    INTEGER NOT NULL REFERENCES videos(id),
-    timestamp   TIMESTAMP NOT NULL,        -- 记录时间
-    views       INTEGER,                   -- 播放量
-    likes       INTEGER,                   -- 点赞数
-    coins       INTEGER,                   -- 投币数
-    favorites   INTEGER,                   -- 收藏数
-    danmaku     INTEGER,                   -- 弹幕数
-    online      INTEGER,                   -- 同时在线 (可选)
-    shares      INTEGER,                   -- 转发数 (可选)
-    rank        INTEGER                    -- 全站排名 (可选)
+    video_id    INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+    timestamp   TEXT    NOT NULL,               -- 记录时间 (ISO)
+    views       INTEGER,                        -- 播放量
+    likes       INTEGER,                        -- 点赞数
+    coins       INTEGER,                        -- 投币数
+    favorites   INTEGER,                        -- 收藏数
+    danmaku     INTEGER,                        -- 弹幕数
+    online      INTEGER,                        -- 同时在线 (可选)
+    shares      INTEGER,                        -- 转发数 (可选)
+    rank        INTEGER                         -- 全站排名 (可选)
+)
+
+-- 任务自定义间隔
+task_intervals (
+    video_id  INTEGER PRIMARY KEY,
+    interval  INTEGER NOT NULL                  -- 秒
 )
 
 CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
@@ -96,74 +112,82 @@ CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
 ## 模块职责
 
 ### `cli.py` — CLI 入口
-- typer command group，包含子命令
-- `create <bvid> --name X [--interval N] [--inactive]`：注册新视频
+- typer command group，11 个子命令
+- `create <bvid> [--name X] [--interval N] [--inactive]`：注册新视频，自动获取发布时数据
+  - 发布时间在 7 天内的视频自动插入一条全 0 基线记录
+  - 间隔 >3600s 时二次确认
 - `delete <bvid/name>`：彻底删除视频及所有记录
-- `start [bvid/name] [--all]`：启动 daemon / 激活任务
+- `start [bvid/name] [--all]`：激活任务 / 启动 daemon
 - `stop [bvid/name] [--all]`：停用任务 / 关 daemon
 - `update <bvid/name> [--name X] [--interval N]`：修改别名或间隔
 - `show <bvid/name> [--last N]`：查看最近记录
-- `list`：列出所有任务
-- `export <bvid/name> [--format csv|json] [--output PATH]`：导出数据
+- `list`：列出所有任务（含发布时间列）
+- `export <bvid/name> [--format csv|json] [--output PATH]`：导出数据（含 bvid 列）
+- `import <file> --bvid <BV> [--format] [--dry-run] [--overwrite]`：导入 CSV/JSON 数据
 - `viz <bvid/name> [--metrics ...] [--type trend|ratio]`：生成可视化
 - `daemon status`：查看守护进程状态
 
 ### `api/client.py` — Bilibili API 封装
 - 封装 `bilibili-api-python` 调用
 - 单例 `asyncio.Semaphore(1)` 保证全局序列化
-- 接口：`fetch_video_info(bvid)`、`fetch_online(bvid)`、`fetch_rank()`
-- 参数校验：BV号格式验证、URL 自动解析
+- 接口：`fetch_video_meta(bvid)`（标题/UP主/发布时间）、`fetch_record_data(bvid)`（统计数据）
+- `_parse_count()` 处理 `'4000+'`、`'1.2w'`、`'3.5K'` 等格式 → 整数
+- 参数校验：BV 号格式验证、URL 自动解析
 
 ### `core/scheduler.py` — 核心调度器
 - 管理监控任务生命周期（添加/删除/暂停/恢复/更新）
 - 主循环：每 ~2s tick，检查各任务到期时间，到期则执行记录
-- warp-around Semaphore(1) 保证所有网络请求串行
+- `asyncio.Semaphore(1)` 保证所有网络请求串行
 - 状态管理：记录每个任务的下次执行时间、执行次数、错误计数
-- CommandQueue 线程安全命令队列，支持面板/外部 IPC
-- `_check_external_changes()` 每 30s 对比 DB 同步 active/interval 变更
-- 最大 5 个并发任务
+- `_check_external_changes()` 每 15 ticks 或收到 SIGUSR1 时对比 DB 同步 active/interval 变更
 - 信号处理：SIGINT/SIGTERM 优雅退出
 
 ### `db/database.py` — 数据库层
-- SQLite 连接管理（单例模式，文件锁安全）
-- 建表、插入记录、查询（按视频、时间范围）
-- 事务处理：批量插入时使用事务
-- 提供 `contextmanager` 确保连接正确关闭
+- SQLite 连接管理（async-safe 文件锁）
+- WAL 模式，写不阻塞读
+- schema-as-code 迁移（`ALTER TABLE ADD COLUMN` try/except）
+- 支持别名/BV 双向查找、记录去重、upsert
 
-### `export/exporter.py` — 导出
-- CSV 导出：`csv.writer`，按字段顺序输出
-- JSON 导出：`json.dump`，按记录列表输出
-- 支持按时间范围过滤
+### `data_import/importer.py` — 数据导入
+- CSV/JSON 解析，自动从扩展名推断格式
+- 文件内 bvid 与命令行 `--bvid` 一致性校验
+- 按 `(video_id, timestamp)` 去重，`--overwrite` 覆盖已有记录
+- `--dry-run` 预览模式
+
+### `export/exporter.py` — 数据导出
+- CSV/JSON 导出，含 bvid 列（便于导入匹配）
+- 文件名自动生成 `{bvid}_{timestamp}.csv/json`
 
 ### `viz/plots.py` — 可视化
 - matplotlib + seaborn，保存到 `output/image/`
 - 趋势图：单视频多指标随时间变化（折线图）
-- 对比图：多视频同一指标对比（叠加折线）
 - 比值图：指标间比值变化（如点赞/播放比）
-- 函数签名统一的绘图接口，便于扩展
 
 ### `daemon/daemon.py` — 守护进程
-- Linux：`os.fork()` + PID 文件，基本 daemon 模式
+- Linux：`os.fork()` + PID 文件
 - Windows：`pythonw.exe` + 隐藏窗口
-- 检测：CLI 启动时检查 PID 文件 + `os.kill(pid, 0)` 探活
-- 使用 `loguru` 输出日志到文件
+- 探活：PID 文件 + `os.kill(pid, 0)`
+- SIGUSR1：通知调度器立即 reload DB 配置
 
 ### `config.py` — 配置
-- 默认值：间隔 300s，数据目录 `./data/`，图片目录 `./output/image/`
-- 环境变量覆盖 `BILI_DATA_DIR`、`BILI_OUTPUT_DIR`
-- 常量：最小间隔 30s，最大间隔 3600s，最大任务数 5
+- 默认值：间隔 900s，数据目录 `./bili_monitor.db`，图片目录 `./output/image/`
+- 环境变量 `BILI_DATA_DIR` 覆盖数据目录
+- 常量：最小间隔 30s，最大任务数 5
 
 ## 运行模式
 
 ```
-# 创建并自动激活
+# 创建（默认激活、启动 daemon）
 $ python -m bili_monitor create BV1xx --name myvideo
 
 # 查看记录
 $ python -m bili_monitor show myvideo --last 5
 
-# 导出与可视化
+# 导入/导出
 $ python -m bili_monitor export myvideo --format csv
+$ python -m bili_monitor import data.csv --bvid BV1xx
+
+# 可视化
 $ python -m bili_monitor viz myvideo --metrics views,likes --type trend
 
 # 启用/停用
@@ -178,8 +202,8 @@ $ python -m bili_monitor daemon status
 
 - **类型注解**：所有函数必须标注类型
 - **异步优先**：网络 I/O 用 async/await，DB 用 sync（stdlib sqlite3，足够快）
-- **异常处理**：网络错误/API变更/BVID不存在等，用自定义异常层次
-- **日志**：使用 `loguru`（已安装），按模块名区分 logger
+- **异常处理**：网络错误/API 变更/BVID 不存在等，具体异常具体处理
+- **日志**：stdlib `logging`，按模块名区分 logger
 - **模块单职责**：每个文件不超过 300 行，超限时拆分
 - **无魔法数字**：常量在 `config.py` 或文件顶部定义
 - **import 顺序**：stdlib → third-party → 本地模块
@@ -197,23 +221,14 @@ $ python -m bili_monitor daemon status
 | 登录 | 不支持 | 用户确认，公开 API 即可 |
 | 可视化 | 保存文件到 output/image/ | 用户确认，不弹窗 |
 | 守护进程 | fork + PID file（首选 Linux） | 简单可靠 |
+| 配置变更通知 | SIGUSR1 | CLI 直接 kill 发信号，零 IPC 依赖 |
 
 ## 开发流程
 
-1. 确定模块接口签名（根据本设计文档）
+1. 确定模块接口签名
 2. 实现核心数据层 `db/` + `api/`
 3. 实现 `core/scheduler.py`
 4. 实现 `cli.py` 串联核心流程
-5. 实现 `export/` + `viz/`
+5. 实现 `export/` + `data_import/` + `viz/`
 6. 实现 `daemon/`
-7. 集成测试
-
-## 已确认设计决策（2025-06-16）
-
-| 问题 | 决策 |
-|------|------|
-
-| 数据库路径 | 默认 `./bili_monitor.db`，环境变量 `$BILI_DATA_DIR` 优先 |
-| 数据保留 | 手动提醒：记录数超180天或 DB >30MB 时提示清理；`config` 中可配自动清理策略 |
-| API 并发控制 | `api/client.py` 统一单例 wrapper，所有 bilibili-api-python 调用经其调度，全局 Semaphore(1) 保证串行 |
-| 可选功能 | 必要时可砍掉：在线人数/转发/排名/弹幕 以及 daemon 模式 |
+7. 测试
