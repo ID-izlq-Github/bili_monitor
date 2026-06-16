@@ -316,61 +316,33 @@ def _chart_hds(ax, hourly, weights, title):
 
 # ── Chart 4: 三连率 ───────────────────────────────────────────
 
-def _chart_conversion(ax, hourly, last_row, title):
-    ts = []
-    like_rate, coin_rate, fav_rate, coin_like = [], [], [], []
-    for h in hourly:
-        dv = h["Δviews"]
-        dl = h["Δlikes"]
-        dc = h["Δcoins"]
-        df = h["Δfavorites"]
-        if dv <= 0:
-            continue
-        like_rate.append(dl / dv)
-        coin_rate.append(dc / dv)
-        fav_rate.append(df / dv)
-        coin_like.append(dc / max(dl, 1))
-        ts.append(h["timestamp"])
+def _chart_conversion(ax, rows, timestamps, title):
+    views = [r["views"] or 1 for r in rows]
+    likes = [r["likes"] or 0 for r in rows]
+    coins = [r["coins"] or 0 for r in rows]
+    favs  = [r["favorites"] or 0 for r in rows]
 
-    if not ts:
+    if len(rows) < 2:
         ax.text(0.5, 0.5, "数据不足", ha="center", va="center", fontsize=14, color="#999")
         _style_ax(ax, title)
         return
 
-    total_v = last_row["views"] or 1
-    total_l = last_row["likes"] or 0
-    total_c = last_row["coins"] or 0
-    total_f = last_row["favorites"] or 0
+    like_rate = [l / max(v, 1) for l, v in zip(likes, views)]
+    coin_rate = [c / max(v, 1) for c, v in zip(coins, views)]
+    fav_rate  = [f / max(v, 1) for f, v in zip(favs, views)]
+    coin_like = [c / max(l, 1) for c, l in zip(coins, likes)]
 
-    cum_like = total_l / max(total_v, 1)
-    cum_coin = total_c / max(total_v, 1)
-    cum_fav = total_f / max(total_v, 1)
-    cum_cl = total_c / max(total_l, 1)
-
-    # Left axis: likes/views, coins/views, favorites/views
-    ax.plot(ts, like_rate, color=_COLORS["likes"], linewidth=1.8,
-            marker="o", markersize=3, alpha=0.8, label="点赞率")
-    ax.axhline(y=cum_like, color=_COLORS["likes"], linewidth=1.2,
-               linestyle="--", alpha=0.5, label=f"点赞率 累计 {cum_like:.3f}")
-
-    ax.plot(ts, coin_rate, color=_COLORS["coins"], linewidth=1.8,
-            marker="o", markersize=3, alpha=0.8, label="投币/播放")
-    ax.axhline(y=cum_coin, color=_COLORS["coins"], linewidth=1.2,
-               linestyle="--", alpha=0.5, label=f"投币/播放 累计 {cum_coin:.3f}")
-
-    ax.plot(ts, fav_rate, color=_COLORS["favorites"], linewidth=1.8,
-            marker="o", markersize=3, alpha=0.8, label="收藏率")
-    ax.axhline(y=cum_fav, color=_COLORS["favorites"], linewidth=1.2,
-               linestyle="--", alpha=0.5, label=f"收藏率 累计 {cum_fav:.3f}")
-
+    ax.plot(timestamps, like_rate, color=_COLORS["likes"], linewidth=1.8,
+            alpha=0.85, label="点赞率")
+    ax.plot(timestamps, coin_rate, color=_COLORS["coins"], linewidth=1.8,
+            alpha=0.85, label="投币率")
+    ax.plot(timestamps, fav_rate, color=_COLORS["favorites"], linewidth=1.8,
+            alpha=0.85, label="收藏率")
     ax.set_ylabel("播放比值", fontsize=10)
 
-    # Right axis: coins/likes
     ax2 = ax.twinx()
-    ax2.plot(ts, coin_like, color=_COLORS["danmaku"], linewidth=1.8,
-             marker="o", markersize=3, alpha=0.8, label="投币/点赞")
-    ax2.axhline(y=cum_cl, color=_COLORS["danmaku"], linewidth=1.2,
-                linestyle="--", alpha=0.5, label=f"投币/点赞 累计 {cum_cl:.3f}")
+    ax2.plot(timestamps, coin_like, color=_COLORS["danmaku"], linewidth=1.8,
+             alpha=0.85, label="投币/点赞")
     ax2.set_ylabel("投币/点赞", fontsize=10)
     ax2.yaxis.label.set_color(_COLORS["danmaku"])
     ax2.tick_params(axis="y", colors=_COLORS["danmaku"])
@@ -378,7 +350,7 @@ def _chart_conversion(ax, hourly, last_row, title):
     l1, lb1 = ax.get_legend_handles_labels()
     l2, lb2 = ax2.get_legend_handles_labels()
     ax.legend(l1 + l2, lb1 + lb2, loc="upper left",
-              framealpha=0.9, fontsize=7, ncol=2)
+              framealpha=0.9, fontsize=8)
     _style_ax(ax, title)
 
 
@@ -580,7 +552,6 @@ async def generate_report(
     timestamps = _ts(rows)
     deltas = _deltas(rows)
     deltas = [d for d in deltas if d["dt"] > 120]
-    hourly = _aggregate_hourly(deltas)
     binned_30 = _aggregate_binned(deltas, 30)
     eff_duration = duration // max(videos, 1) if duration else None
 
@@ -615,7 +586,7 @@ async def generate_report(
                 elif chart_name == "02_互动增量":
                     func(ax, binned_30, title)
                 elif chart_name == "04_三连率":
-                    func(ax, hourly, rows[-1], title)
+                    func(ax, rows, timestamps, title)
                 elif chart_name in ("07_累计绝对值趋势", "01_播放与互动"):
                     func(ax, rows, timestamps, title)
                 else:
