@@ -28,14 +28,14 @@ async def export_records(
 
     rows = await db.get_records(video_id)
     field_names = [
-        "timestamp", "views", "likes", "coins", "favorites",
+        "bvid", "timestamp", "views", "likes", "coins", "favorites",
         "danmaku", "online", "shares", "rank",
     ]
 
     if fmt == "csv":
-        await _export_csv(out, rows, field_names)
+        await _export_csv(out, rows, bvid, field_names)
     elif fmt == "json":
-        await _export_json(out, rows, field_names)
+        await _export_json(out, rows, bvid, field_names)
     else:
         raise ValueError(f"不支持的导出格式: {fmt}")
 
@@ -43,24 +43,24 @@ async def export_records(
 
 
 async def _export_csv(
-    path: Path, rows, field_names: list[str]
+    path: Path, rows, bvid: str, field_names: list[str]
 ) -> None:
     def _write():
         with open(path, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(field_names)
             for r in rows:
-                w.writerow([r[f] for f in field_names])
+                w.writerow([bvid] + [r[f] for f in field_names[1:]])
     import asyncio
     await asyncio.to_thread(_write)
 
 
 async def _export_json(
-    path: Path, rows, field_names: list[str]
+    path: Path, rows, bvid: str, field_names: list[str]
 ) -> None:
     def _write():
         data = [
-            {f: r[f] for f in field_names}
+            {"bvid": bvid, **{f: r[f] for f in field_names[1:]}}
             for r in rows
         ]
         with open(path, "w", encoding="utf-8") as f:

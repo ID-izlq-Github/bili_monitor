@@ -39,11 +39,30 @@ def _safe_int(val: Any, default: int = 0) -> int:
         return default
 
 
+def _parse_count(val: Any) -> int:
+    if val is None:
+        return 0
+    if isinstance(val, (int, float)):
+        return int(val)
+    s = str(val).strip().lower().rstrip("+")
+    for suffix, mul in [("w", 10_000), ("万", 10_000), ("k", 1_000)]:
+        if s.endswith(suffix):
+            try:
+                return int(float(s[: -len(suffix)]) * mul)
+            except ValueError:
+                return 0
+    try:
+        return int(s)
+    except ValueError:
+        return 0
+
+
 @dataclass
 class VideoMeta:
     bvid: str
     title: str
     uploader: str
+    pubdate: Optional[int] = None
 
 
 _global_semaphore: asyncio.Semaphore | None = None
@@ -95,6 +114,7 @@ class BiliAPIClient:
             bvid=bvid,
             title=info.get("title", ""),
             uploader=owner.get("name", ""),
+            pubdate=info.get("pubdate"),
         )
 
     async def fetch_record_data(self, bvid: str) -> RecordData:
@@ -117,7 +137,7 @@ class BiliAPIClient:
             logger.warning("[%s] 获取视频信息失败: %s", bvid, info)
 
         if isinstance(online, dict):
-            data.online = _safe_int(online.get("total"))
+            data.online = _parse_count(online.get("total"))
         elif isinstance(online, BaseException):
             logger.debug("[%s] 获取在线人数失败: %s", bvid, online)
 

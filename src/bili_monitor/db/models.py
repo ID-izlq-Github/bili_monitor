@@ -11,12 +11,14 @@ CREATE TABLE IF NOT EXISTS videos (
     title       TEXT NOT NULL,
     uploader    TEXT NOT NULL,
     created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-    active      INTEGER NOT NULL DEFAULT 0
+    active      INTEGER NOT NULL DEFAULT 0,
+    pubdate     TEXT
 )
 """
 
 ADD_NAME_COL = "ALTER TABLE videos ADD COLUMN name TEXT"
 BACKFILL_NAME = "UPDATE videos SET name = bvid WHERE name IS NULL"
+ADD_PUBDATE_COL = "ALTER TABLE videos ADD COLUMN pubdate TEXT"
 
 RECORDS_TABLE = """
 CREATE TABLE IF NOT EXISTS records (
@@ -86,6 +88,7 @@ class TaskRow:
     created_at: str
     record_count: int
     last_record: Optional[str]
+    pubdate: Optional[str] = None
 
 
 @dataclass

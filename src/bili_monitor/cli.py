@@ -14,6 +14,7 @@ from bili_monitor.api.client import BiliAPIClient
 from bili_monitor.config import Settings
 from bili_monitor.daemon.daemon import DaemonManager
 from bili_monitor.db.database import Database
+from bili_monitor.db.models import RecordData
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,8 +65,8 @@ def create(
     bvid: str = typer.Argument(..., help="BV号或视频URL"),
     name: str = typer.Option("", "--name", "-n", help="别名（不传则自动生成）"),
     interval: int = typer.Option(
-        300, "--interval", "-i",
-        min=30, max=3600, help="记录间隔（秒）",
+        900, "--interval", "-i",
+        min=30, help="记录间隔（秒），大于3600时会二次确认",
     ),
     inactive: bool = typer.Option(
         False, "--inactive", help="创建后不自动激活",
@@ -86,14 +87,36 @@ async def _cmd_create(
             console.print(f"[red]✗[/] BV [bold]{bvid}[/] 已存在，请直接 start")
             raise typer.Exit(1)
 
+        if interval > 3600:
+            if not typer.confirm(f"⚠ 间隔 {interval}s (>1小时)，确认继续？"):
+                raise typer.Exit(0)
+
         resolved_name = name or _auto_name(raw)
         if await db.name_exists(resolved_name):
             console.print(f"[red]✗[/] 别名 [bold]{resolved_name}[/] 已被使用")
             raise typer.Exit(1)
 
         meta = await api.fetch_video_meta(bvid)
-        video_id = await db.create_video(bvid, resolved_name, meta.title, meta.uploader)
+        pubdate_iso = (
+            datetime.fromtimestamp(meta.pubdate).isoformat()
+            if meta.pubdate else None
+        )
+        video_id = await db.create_video(
+            bvid, resolved_name, meta.title, meta.uploader,
+            pubdate=pubdate_iso,
+        )
         await db.save_interval(video_id, interval)
+
+        zero_record_inserted = False
+        if meta.pubdate:
+            pub_dt = datetime.fromtimestamp(meta.pubdate)
+            if (datetime.now() - pub_dt).days <= 7:
+                zero_data = RecordData(
+                    views=0, likes=0, coins=0, favorites=0,
+                    danmaku=0, online=0, shares=0, rank=0,
+                )
+                await db.insert_record(video_id, pub_dt, zero_data)
+                zero_record_inserted = True
 
         if not inactive:
             await db.set_video_active(video_id, True)
@@ -105,9 +128,10 @@ async def _cmd_create(
                 console.print("[green]✓[/] 守护进程已启动")
             else:
                 mgr.reload()
-            console.print(
-                f"[green]✓[/] 已创建并激活 [bold]{resolved_name}[/] ({bvid})"
-            )
+            msg = f"[green]✓[/] 已创建并激活 [bold]{resolved_name}[/] ({bvid})"
+            if zero_record_inserted:
+                msg += " [dim](含发布时零记录)[/]"
+            console.print(msg)
         else:
             console.print(f"[green]✓[/] 已创建 [bold]{resolved_name}[/] ({bvid}) [dim](未激活)[/]")
     finally:
@@ -256,7 +280,7 @@ def update(
     name: Optional[str] = typer.Option(None, "--name", "-n", help="新别名"),
     interval: Optional[int] = typer.Option(
         None, "--interval", "-i",
-        min=30, max=3600, help="新记录间隔（秒）",
+        min=30, help="新记录间隔（秒），大于3600时会二次确认",
     ),
 ):
     """修改任务别名或记录间隔"""
@@ -272,6 +296,10 @@ async def _cmd_update(
         if not row:
             console.print(f"[red]✗[/] 未找到 [bold]{bvid_or_name}[/]")
             raise typer.Exit(1)
+        if interval is not None and interval > 3600:
+            if not typer.confirm(f"⚠ 间隔 {interval}s (>1小时)，确认继续？"):
+                raise typer.Exit(0)
+
         if name is not None:
             if await db.name_exists(name, exclude_bvid=row["bvid"]):
                 console.print(f"[red]✗[/] 别名 [bold]{name}[/] 已被使用")
@@ -362,13 +390,15 @@ async def _cmd_list() -> None:
         table.add_column("间隔")
         table.add_column("记录数", justify="right")
         table.add_column("最后记录")
+        table.add_column("发布时间")
         for t in tasks:
             status = "[green]● 活跃[/]" if t.active else "[dim]● 停止[/]"
             last = t.last_record or "[dim]—[/]"
+            pub = t.pubdate or "[dim]—[/]"
             table.add_row(
                 t.name, t.bvid, t.title[:40], t.uploader,
                 status, f"{t.interval}s",
-                str(t.record_count), last,
+                str(t.record_count), last, pub[:19] if t.pubdate else "[dim]—[/]",
             )
         console.print(table)
     finally:
@@ -465,6 +495,54 @@ def daemon(
         console.print(f"[green]●[/] 守护进程运行中 (PID: {pid})[/]")
     else:
         console.print("[dim]○[/] 守护进程未运行")
+
+
+# ── import ─────────────────────────────────────────────────────
+
+
+@app.command(name="import")
+def import_(
+    file: Path = typer.Argument(..., help="导入文件路径 (CSV/JSON)"),
+    bvid: str = typer.Option(..., "--bvid", "-b", help="目标视频 BV 号"),
+    format: Optional[str] = typer.Option(
+        None, "--format", "-f", help="文件格式 (csv/json，默认从扩展名推断)",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-n", help="仅预览，不写入数据库",
+    ),
+    overwrite: bool = typer.Option(
+        False, "--overwrite", "-o", help="覆盖已存在的记录",
+    ),
+):
+    """从文件导入记录数据到视频"""
+    asyncio.run(_cmd_import(file, bvid, format, dry_run, overwrite))
+
+
+async def _cmd_import(
+    file: Path, bvid: str, format: Optional[str],
+    dry_run: bool, overwrite: bool,
+) -> None:
+    if not file.exists():
+        console.print(f"[red]✗[/] 文件不存在: [bold]{file}[/]")
+        raise typer.Exit(1)
+
+    db, api = await _init()
+    try:
+        from bili_monitor.data_import.importer import import_records
+        result = await import_records(
+            file, bvid, db,
+            format=format, dry_run=dry_run, overwrite=overwrite,
+        )
+        if dry_run:
+            console.print(f"[yellow]🔍 预览[/] {result.summary} [dim](未写入)")
+        else:
+            icon = "[green]✓" if result.errors == 0 else "[yellow]⚠"
+            console.print(f"{icon}[/] 导入完成: {result.summary}")
+    except ValueError as e:
+        console.print(f"[red]✗[/] {e}")
+        raise typer.Exit(1)
+    finally:
+        await _cleanup(db, api)
 
 
 # ── helpers ────────────────────────────────────────────────────

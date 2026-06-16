@@ -10,6 +10,7 @@ import asyncio
 from bili_monitor.config import Settings
 from bili_monitor.db.models import (
     ADD_NAME_COL,
+    ADD_PUBDATE_COL,
     BACKFILL_NAME,
     CHECK_SIZE_SQL,
     DELETE_OLD_RECORDS,
@@ -51,10 +52,11 @@ class Database:
         await self._execute(RECORDS_TABLE)
         await self._execute(RECORDS_INDEX)
         await self._execute(TASK_INTERVALS_TABLE)
-        try:
-            await self._execute(ADD_NAME_COL)
-        except sqlite3.OperationalError:
-            pass
+        for migration in (ADD_NAME_COL, ADD_PUBDATE_COL):
+            try:
+                await self._execute(migration)
+            except sqlite3.OperationalError:
+                pass
         await self._execute(BACKFILL_NAME)
 
     async def _execute(
@@ -111,12 +113,13 @@ class Database:
     # ── Video CRUD ──────────────────────────────────────────────
 
     async def create_video(
-        self, bvid: str, name: str, title: str, uploader: str
+        self, bvid: str, name: str, title: str, uploader: str,
+        pubdate: Optional[str] = None,
     ) -> int:
         await self._execute(
-            "INSERT INTO videos (bvid, name, title, uploader, active) "
-            "VALUES (?, ?, ?, ?, 0)",
-            (bvid, name, title, uploader),
+            "INSERT INTO videos (bvid, name, title, uploader, pubdate, active) "
+            "VALUES (?, ?, ?, ?, ?, 0)",
+            (bvid, name, title, uploader, pubdate),
         )
         await self._commit()
         row = await self._fetchone(
@@ -167,7 +170,8 @@ class Database:
     async def get_all_tasks(self) -> list[TaskRow]:
         rows = await self._fetchall(
             "SELECT v.id, v.bvid, v.name, v.title, v.uploader, "
-            "v.active, COALESCE(i.interval, ?) AS interval, "
+            "v.active, v.pubdate, "
+            "COALESCE(i.interval, ?) AS interval, "
             "v.created_at, "
             "COUNT(r.id) AS record_count, "
             "MAX(r.timestamp) AS last_record "
@@ -190,6 +194,7 @@ class Database:
                 created_at=row["created_at"],
                 record_count=row["record_count"],
                 last_record=row["last_record"],
+                pubdate=row["pubdate"],
             )
             for row in rows
         ]
@@ -258,6 +263,42 @@ class Database:
             "DELETE FROM task_intervals WHERE video_id = ?",
             (video_id,),
         )
+
+    # ── Import helpers ───────────────────────────────────────────
+
+    async def record_exists(
+        self, video_id: int, timestamp: str
+    ) -> bool:
+        row = await self._fetchone(
+            "SELECT 1 FROM records WHERE video_id = ? AND timestamp = ?",
+            (video_id, timestamp),
+        )
+        return row is not None
+
+    async def upsert_record(
+        self, video_id: int, timestamp: str, data: RecordData
+    ) -> bool:
+        exists = await self.record_exists(video_id, timestamp)
+        if exists:
+            await self._execute(
+                "UPDATE records SET views=?, likes=?, coins=?, "
+                "favorites=?, danmaku=?, online=?, shares=?, rank=? "
+                "WHERE video_id=? AND timestamp=?",
+                (data.views, data.likes, data.coins,
+                 data.favorites, data.danmaku, data.online,
+                 data.shares, data.rank, video_id, timestamp),
+            )
+        else:
+            await self._execute(
+                "INSERT INTO records (video_id, timestamp, views, likes, "
+                "coins, favorites, danmaku, online, shares, rank) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (video_id, timestamp, data.views, data.likes,
+                 data.coins, data.favorites, data.danmaku,
+                 data.online, data.shares, data.rank),
+            )
+        await self._commit()
+        return not exists
 
     # ── Cleanup ─────────────────────────────────────────────────
 
