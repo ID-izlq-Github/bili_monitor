@@ -393,22 +393,32 @@ def _chart_vdr_from_rows(ax, rows, deltas, duration, title):
         return
 
     vdr_vals, ts = [], []
+    acc_dt, acc_views, start_online = 0, 0, None
+    end_online, last_ts = 0, None
     for d in deltas:
         if d["Δviews"] <= 0:
-            continue
-        if d["dt"] < duration:
             continue
         idx = d["i"]
         online_prev = rows[idx - 1]["online"] or 0
         online_curr = rows[idx]["online"] or 0
         if online_prev <= 0 or online_curr <= 0:
             continue
-        expected = (online_prev + online_curr) / 2 * d["dt"] / duration
-        if expected <= 0:
-            continue
-        vdr = d["Δviews"] / expected
-        vdr_vals.append(min(vdr, 5))
-        ts.append(d["timestamp"])
+        if start_online is None:
+            start_online = online_prev
+            acc_dt, acc_views = 0, 0
+        acc_dt += d["dt"]
+        acc_views += d["Δviews"]
+        end_online = online_curr
+        last_ts = d["timestamp"]
+        if acc_dt >= duration:
+            online_avg = (start_online + end_online) / 2
+            if online_avg > 0:
+                expected = online_avg * acc_dt / duration
+                if expected > 0:
+                    vdr = acc_views / expected
+                    vdr_vals.append(min(vdr, 5))
+                    ts.append(last_ts)
+            start_online = None
 
     if len(vdr_vals) < 3:
         ax.text(0.5, 0.5, "数据不足 (需 ≥3 个 Δt≥视频时长的有效间隔)",
