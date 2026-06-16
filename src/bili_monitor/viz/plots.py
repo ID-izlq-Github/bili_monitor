@@ -206,7 +206,7 @@ def _chart_trend(ax, rows, timestamps, title):
     l1, lb1 = ax.get_legend_handles_labels()
     l2, lb2 = ax2.get_legend_handles_labels()
     ax.legend(l1 + l2, lb1 + lb2, loc="upper left",
-              framealpha=0.9, fontsize=9, zorder=5)
+               framealpha=0.9, fontsize=9)
     _style_ax(ax, title)
 
 
@@ -328,7 +328,7 @@ def _chart_vdr_from_rows(ax, rows, deltas, duration, title):
         _style_ax(ax, title)
         return
 
-    has_online = any(r.get("online") is not None for r in rows)
+    has_online = any(r["online"] is not None for r in rows)
     if not has_online:
         ax.text(0.5, 0.5, "暂无在线人数数据\n(新记录会自动采集)",
                 ha="center", va="center", fontsize=12, color="#999")
@@ -340,8 +340,8 @@ def _chart_vdr_from_rows(ax, rows, deltas, duration, title):
         if d["Δviews"] <= 0:
             continue
         idx = d["i"]
-        online_prev = rows[idx - 1].get("online") or 0
-        online_curr = rows[idx].get("online") or 0
+        online_prev = rows[idx - 1]["online"] or 0
+        online_curr = rows[idx]["online"] or 0
         expected = (online_prev + online_curr) / 2 * d["dt"] / duration
         if expected <= 0:
             continue
@@ -389,7 +389,7 @@ def _chart_avg_stay(ax, rows, deltas, duration, title):
         _style_ax(ax, title)
         return
 
-    has_online = any(r.get("online") is not None for r in rows)
+    has_online = any(r["online"] is not None for r in rows)
     if not has_online:
         ax.text(0.5, 0.5, "暂无在线人数数据\n(新记录会自动采集)",
                 ha="center", va="center", fontsize=12, color="#999")
@@ -401,8 +401,8 @@ def _chart_avg_stay(ax, rows, deltas, duration, title):
         if d["Δviews"] <= 0:
             continue
         idx = d["i"]
-        online_prev = rows[idx - 1].get("online") or 0
-        online_curr = rows[idx].get("online") or 0
+        online_prev = rows[idx - 1]["online"] or 0
+        online_curr = rows[idx]["online"] or 0
         integral = (online_prev + online_curr) / 2 * d["dt"]
         stay = integral / max(d["Δviews"], 1)
         stay_vals.append(min(stay, duration * 3))
@@ -444,7 +444,7 @@ def _chart_scatter(ax, rows, deltas, duration, title):
         _style_ax(ax, title)
         return
 
-    has_online = any(r.get("online") is not None for r in rows)
+    has_online = any(r["online"] is not None for r in rows)
     if not has_online:
         ax.text(0.5, 0.5, "暂无在线人数数据\n(新记录会自动采集)",
                 ha="center", va="center", fontsize=12, color="#999")
@@ -456,8 +456,8 @@ def _chart_scatter(ax, rows, deltas, duration, title):
         if d["Δviews"] < 0:
             continue
         idx = d["i"]
-        online_avg = ((rows[idx - 1].get("online") or 0) +
-                      (rows[idx].get("online") or 0)) / 2
+        online_avg = ((rows[idx - 1]["online"] or 0) +
+                      (rows[idx]["online"] or 0)) / 2
         x = online_avg / (2 * duration)
         y = d["Δviews"] / max(d["dt"], 1)
         xs.append(x)
