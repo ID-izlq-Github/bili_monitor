@@ -40,6 +40,7 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
+        self._conn.execute("PRAGMA busy_timeout=3000")
         await self._init_tables()
 
     async def close(self) -> None:
@@ -52,12 +53,16 @@ class Database:
         await self._execute(RECORDS_TABLE)
         await self._execute(RECORDS_INDEX)
         await self._execute(TASK_INTERVALS_TABLE)
+        name_col_added = False
         for migration in (ADD_NAME_COL, ADD_PUBDATE_COL):
             try:
                 await self._execute(migration)
+                if migration == ADD_NAME_COL:
+                    name_col_added = True
             except sqlite3.OperationalError:
                 pass
-        await self._execute(BACKFILL_NAME)
+        if name_col_added:
+            await self._execute(BACKFILL_NAME)
 
     async def _execute(
         self, sql: str, params: tuple = ()
