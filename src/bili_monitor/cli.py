@@ -105,6 +105,8 @@ async def _cmd_create(
         video_id = await db.create_video(
             bvid, resolved_name, meta.title, meta.uploader,
             pubdate=pubdate_iso,
+            duration=meta.duration or None,
+            tname=meta.tname or None,
         )
         await db.save_interval(video_id, interval)
 
@@ -397,13 +399,16 @@ async def _cmd_show(bvid_or_name: str, last: int) -> None:
         table.add_column("投币", justify="right")
         table.add_column("收藏", justify="right")
         table.add_column("弹幕", justify="right")
+        table.add_column("评论", justify="right")
         table.add_column("在线", justify="right")
+        table.add_column("最高排名", justify="right")
         for r in records:
             table.add_row(
                 r["timestamp"][:19],
                 _n(r["views"]), _n(r["likes"]),
                 _n(r["coins"]), _n(r["favorites"]),
-                _n(r["danmaku"]), _n(r["online"]),
+                _n(r["danmaku"]), _n(r["reply"]),
+                _n(r["online"]), _n(r["his_rank"]),
             )
         console.print(table)
     finally:
@@ -431,6 +436,8 @@ async def _cmd_list() -> None:
         table.add_column("BV号")
         table.add_column("标题", no_wrap=False)
         table.add_column("UP主")
+        table.add_column("分区", no_wrap=False)
+        table.add_column("时长")
         table.add_column("状态")
         table.add_column("间隔")
         table.add_column("记录数", justify="right")
@@ -440,8 +447,11 @@ async def _cmd_list() -> None:
             status = "[green]● 活跃[/]" if t.active else "[dim]● 停止[/]"
             last = t.last_record or "[dim]—[/]"
             pub = t.pubdate or "[dim]—[/]"
+            duration_str = _fmt_duration(t.duration) if t.duration else "[dim]—[/]"
+            tname_str = t.tname or "[dim]—[/]"
             table.add_row(
                 t.name, t.bvid, t.title[:40], t.uploader,
+                tname_str, duration_str,
                 status, f"{t.interval}s",
                 str(t.record_count), last, pub[:19] if t.pubdate else "[dim]—[/]",
             )
@@ -621,3 +631,11 @@ def _snap_fmt(val) -> str:
     if n >= 10_000:
         return f"{n / 10_000:.1f}万"
     return str(n)
+
+
+def _fmt_duration(seconds: int) -> str:
+    h, r = divmod(seconds, 3600)
+    m, s = divmod(r, 60)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"

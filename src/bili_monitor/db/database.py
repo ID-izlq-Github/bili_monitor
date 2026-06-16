@@ -9,8 +9,12 @@ import asyncio
 
 from bili_monitor.config import Settings
 from bili_monitor.db.models import (
+    ADD_DURATION_COL,
+    ADD_HIS_RANK_COL,
     ADD_NAME_COL,
     ADD_PUBDATE_COL,
+    ADD_REPLY_COL,
+    ADD_TNAME_COL,
     BACKFILL_NAME,
     CHECK_SIZE_SQL,
     DELETE_OLD_RECORDS,
@@ -54,7 +58,9 @@ class Database:
         await self._execute(RECORDS_INDEX)
         await self._execute(TASK_INTERVALS_TABLE)
         name_col_added = False
-        for migration in (ADD_NAME_COL, ADD_PUBDATE_COL):
+        for migration in (ADD_NAME_COL, ADD_PUBDATE_COL,
+                          ADD_DURATION_COL, ADD_TNAME_COL,
+                          ADD_REPLY_COL, ADD_HIS_RANK_COL):
             try:
                 await self._execute(migration)
                 if migration == ADD_NAME_COL:
@@ -120,11 +126,14 @@ class Database:
     async def create_video(
         self, bvid: str, name: str, title: str, uploader: str,
         pubdate: Optional[str] = None,
+        duration: Optional[int] = None,
+        tname: Optional[str] = None,
     ) -> int:
         await self._execute(
-            "INSERT INTO videos (bvid, name, title, uploader, pubdate, active) "
-            "VALUES (?, ?, ?, ?, ?, 0)",
-            (bvid, name, title, uploader, pubdate),
+            "INSERT INTO videos (bvid, name, title, uploader, pubdate, "
+            "duration, tname, active) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
+            (bvid, name, title, uploader, pubdate, duration, tname),
         )
         await self._commit()
         row = await self._fetchone(
@@ -175,7 +184,7 @@ class Database:
     async def get_all_tasks(self) -> list[TaskRow]:
         rows = await self._fetchall(
             "SELECT v.id, v.bvid, v.name, v.title, v.uploader, "
-            "v.active, v.pubdate, "
+            "v.active, v.pubdate, v.duration, v.tname, "
             "COALESCE(i.interval, ?) AS interval, "
             "v.created_at, "
             "COUNT(r.id) AS record_count, "
@@ -200,6 +209,8 @@ class Database:
                 record_count=row["record_count"],
                 last_record=row["last_record"],
                 pubdate=row["pubdate"],
+                duration=row["duration"],
+                tname=row["tname"],
             )
             for row in rows
         ]
@@ -211,8 +222,8 @@ class Database:
     ) -> None:
         await self._execute(
             "INSERT INTO records (video_id, timestamp, views, likes, "
-            "coins, favorites, danmaku, online, shares, rank) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "coins, favorites, danmaku, online, shares, rank, reply, his_rank) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 video_id,
                 timestamp.isoformat(),
@@ -224,6 +235,8 @@ class Database:
                 data.online,
                 data.shares,
                 data.rank,
+                data.reply,
+                data.his_rank,
             ),
         )
         await self._commit()
@@ -287,20 +300,23 @@ class Database:
         if exists:
             await self._execute(
                 "UPDATE records SET views=?, likes=?, coins=?, "
-                "favorites=?, danmaku=?, online=?, shares=?, rank=? "
+                "favorites=?, danmaku=?, online=?, shares=?, rank=?, "
+                "reply=?, his_rank=? "
                 "WHERE video_id=? AND timestamp=?",
                 (data.views, data.likes, data.coins,
                  data.favorites, data.danmaku, data.online,
-                 data.shares, data.rank, video_id, timestamp),
+                 data.shares, data.rank, data.reply, data.his_rank,
+                 video_id, timestamp),
             )
         else:
             await self._execute(
                 "INSERT INTO records (video_id, timestamp, views, likes, "
-                "coins, favorites, danmaku, online, shares, rank) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "coins, favorites, danmaku, online, shares, rank, reply, his_rank) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (video_id, timestamp, data.views, data.likes,
                  data.coins, data.favorites, data.danmaku,
-                 data.online, data.shares, data.rank),
+                 data.online, data.shares, data.rank,
+                 data.reply, data.his_rank),
             )
         await self._commit()
         return not exists

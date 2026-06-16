@@ -12,13 +12,19 @@ CREATE TABLE IF NOT EXISTS videos (
     uploader    TEXT NOT NULL,
     created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     active      INTEGER NOT NULL DEFAULT 0,
-    pubdate     TEXT
+    pubdate     TEXT,
+    duration    INTEGER,
+    tname       TEXT
 )
 """
 
 ADD_NAME_COL = "ALTER TABLE videos ADD COLUMN name TEXT"
 BACKFILL_NAME = "UPDATE videos SET name = bvid WHERE name IS NULL"
 ADD_PUBDATE_COL = "ALTER TABLE videos ADD COLUMN pubdate TEXT"
+ADD_DURATION_COL = "ALTER TABLE videos ADD COLUMN duration INTEGER"
+ADD_TNAME_COL = "ALTER TABLE videos ADD COLUMN tname TEXT"
+ADD_REPLY_COL = "ALTER TABLE records ADD COLUMN reply INTEGER"
+ADD_HIS_RANK_COL = "ALTER TABLE records ADD COLUMN his_rank INTEGER"
 
 RECORDS_TABLE = """
 CREATE TABLE IF NOT EXISTS records (
@@ -32,7 +38,9 @@ CREATE TABLE IF NOT EXISTS records (
     danmaku     INTEGER,
     online      INTEGER,
     shares      INTEGER,
-    rank        INTEGER
+    rank        INTEGER,
+    reply       INTEGER,
+    his_rank    INTEGER
 )
 """
 
@@ -74,6 +82,8 @@ class RecordData:
     online: Optional[int] = None
     shares: Optional[int] = None
     rank: Optional[int] = None
+    reply: Optional[int] = None
+    his_rank: Optional[int] = None
 
 
 @dataclass
@@ -89,6 +99,8 @@ class TaskRow:
     record_count: int
     last_record: Optional[str]
     pubdate: Optional[str] = None
+    duration: Optional[int] = None
+    tname: Optional[str] = None
 
 
 @dataclass
@@ -102,3 +114,5 @@ class RecordRow:
     online: Optional[int]
     shares: Optional[int]
     rank: Optional[int]
+    reply: Optional[int]
+    his_rank: Optional[int]

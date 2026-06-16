@@ -21,8 +21,8 @@ async def _test_roundtrip_csv():
         video_id = await db.create_video(bvid, "test_video", "Test Title", "Test Uploader")
         assert video_id > 0
 
-        data1 = RecordData(views=100, likes=10, coins=5, favorites=20, danmaku=30, online=50, shares=2, rank=1)
-        data2 = RecordData(views=200, likes=20, coins=10, favorites=40, danmaku=60, online=100, shares=4, rank=2)
+        data1 = RecordData(views=100, likes=10, coins=5, favorites=20, danmaku=30, online=50, shares=2, rank=1, reply=3, his_rank=10)
+        data2 = RecordData(views=200, likes=20, coins=10, favorites=40, danmaku=60, online=100, shares=4, rank=2, reply=8, his_rank=15)
 
         ts1 = datetime(2026, 1, 1, 12, 0, 0)
         ts2 = datetime(2026, 1, 2, 12, 0, 0)
@@ -70,7 +70,7 @@ async def _test_roundtrip_json():
 
         bvid = "BV1xxJSON"
         video_id = await db.create_video(bvid, "json_test", "JSON Title", "Uploader")
-        data = RecordData(views=500, likes=50, coins=25, favorites=100, danmaku=150, online=200, shares=10, rank=3)
+        data = RecordData(views=500, likes=50, coins=25, favorites=100, danmaku=150, online=200, shares=10, rank=3, reply=12, his_rank=50)
         await db.insert_record(video_id, datetime(2026, 6, 1, 0, 0, 0), data)
 
         from bili_monitor.export.exporter import export_records

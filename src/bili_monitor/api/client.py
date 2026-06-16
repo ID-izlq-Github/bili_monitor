@@ -27,6 +27,8 @@ RECORD_FIELDS = {
     "danmaku": "danmaku",
     "share": "shares",
     "now_rank": "rank",
+    "reply": "reply",
+    "his_rank": "his_rank",
 }
 
 
@@ -63,6 +65,8 @@ class VideoMeta:
     title: str
     uploader: str
     pubdate: Optional[int] = None
+    duration: int = 0
+    tname: str = ""
 
 
 _global_semaphore: asyncio.Semaphore | None = None
@@ -115,6 +119,8 @@ class BiliAPIClient:
             title=info.get("title", ""),
             uploader=owner.get("name", ""),
             pubdate=info.get("pubdate"),
+            duration=info.get("duration", 0),
+            tname=info.get("tname", ""),
         )
 
     async def fetch_record_data(self, bvid: str) -> RecordData:
