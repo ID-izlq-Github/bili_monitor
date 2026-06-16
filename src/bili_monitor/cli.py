@@ -332,7 +332,7 @@ def update(
         min=30, help="新记录间隔（秒），大于3600时会二次确认",
     ),
     refresh_meta: bool = typer.Option(
-        False, "--refresh-meta", help="重新抓取视频标题、UP主、时长、分区等信息",
+        False, "--refresh-meta", help="重新抓取视频标题、UP主、时长、分区、发布时间",
     ),
 ):
     """修改任务别名、记录间隔或刷新元数据"""
@@ -362,12 +362,17 @@ async def _cmd_update(
             await db.save_interval(row["id"], interval)
         if refresh_meta:
             meta = await api.fetch_video_meta(row["bvid"])
+            pubdate_iso = (
+                datetime.fromtimestamp(meta.pubdate).isoformat()
+                if meta.pubdate else None
+            )
             await db.update_video_meta(
                 row["id"],
                 title=meta.title,
                 uploader=meta.uploader,
                 duration=meta.duration or None,
                 tname=meta.tname or None,
+                pubdate=pubdate_iso,
             )
         mgr = DaemonManager()
         mgr.reload()

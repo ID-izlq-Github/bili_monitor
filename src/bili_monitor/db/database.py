@@ -165,11 +165,13 @@ class Database:
         uploader: Optional[str] = None,
         duration: Optional[int] = None,
         tname: Optional[str] = None,
+        pubdate: Optional[str] = None,
     ) -> None:
         sets = []
         params: list = []
         for key, val in [("title", title), ("uploader", uploader),
-                          ("duration", duration), ("tname", tname)]:
+                          ("duration", duration), ("tname", tname),
+                          ("pubdate", pubdate)]:
             if val is not None:
                 sets.append(f"{key} = ?")
                 params.append(val)
