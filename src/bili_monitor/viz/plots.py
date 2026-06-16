@@ -570,7 +570,7 @@ async def generate_report(
     deltas = _deltas(rows)
     deltas = [d for d in deltas if d["dt"] > 120]
     hourly = _aggregate_hourly(deltas)
-    binned_15 = _aggregate_binned(deltas, 15)
+    binned_30 = _aggregate_binned(deltas, 30)
     eff_duration = duration // max(videos, 1) if duration else None
 
     base_dir = output or _report_dir(cfg, bvid, name, rows)
@@ -600,9 +600,9 @@ async def generate_report(
                 if chart_name in ("05_观看留存率", "06_平均观看时长"):
                     func(ax, rows, deltas, eff_duration, title)
                 elif chart_name == "03_互动转化效率":
-                    func(ax, binned_15, weights, title)
+                    func(ax, binned_30, weights, title)
                 elif chart_name == "02_互动增量":
-                    func(ax, binned_15, title)
+                    func(ax, binned_30, title)
                 elif chart_name == "04_三连率":
                     func(ax, hourly, rows[-1], title)
                 elif chart_name in ("07_累计绝对值趋势", "01_播放与互动"):
