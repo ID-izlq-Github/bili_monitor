@@ -138,6 +138,58 @@ async def _cmd_create(
         await _cleanup(db, api)
 
 
+# ── snap ───────────────────────────────────────────────────────
+
+
+@app.command()
+def snap(
+    bvid_or_name: Optional[str] = typer.Argument(
+        None, help="BV号或别名（不传则配合 --all）",
+    ),
+    all_tasks: bool = typer.Option(
+        False, "--all", "-a", help="所有活跃任务各记录一次",
+    ),
+):
+    """立即记录一次数据（不等待调度器）"""
+    asyncio.run(_cmd_snap(bvid_or_name, all_tasks))
+
+
+async def _cmd_snap(
+    bvid_or_name: Optional[str], all_tasks: bool
+) -> None:
+    if not bvid_or_name and not all_tasks:
+        console.print("[red]✗[/] 请指定 BV号/别名，或使用 --all")
+        raise typer.Exit(1)
+
+    db, api = await _init()
+    try:
+        targets: list[tuple[int, str]] = []
+        if all:
+            tasks = await db.get_all_tasks()
+            targets = [(t.video_id, t.bvid) for t in tasks if t.active]
+            if not targets:
+                console.print("[yellow]⚠[/] 没有活跃任务")
+                raise typer.Exit(0)
+        else:
+            row = await db.find_video(bvid_or_name)
+            if not row:
+                console.print(f"[red]✗[/] 未找到 [bold]{bvid_or_name}[/]")
+                raise typer.Exit(1)
+            targets = [(row["id"], row["bvid"])]
+
+        for video_id, bvid in targets:
+            data = await api.fetch_record_data(bvid)
+            now = datetime.now()
+            await db.insert_record(video_id, now, data)
+            console.print(
+                f"[green]✓[/] [bold]{bvid}[/]  "
+                f"{_snap_fmt(data.views)}播放 / {_snap_fmt(data.likes)}赞 / "
+                f"{_snap_fmt(data.coins)}币 / {_snap_fmt(data.favorites)}收藏"
+            )
+    finally:
+        await _cleanup(db, api)
+
+
 # ── delete ─────────────────────────────────────────────────────
 
 
@@ -568,6 +620,15 @@ async def _cmd_import(
 def _n(val) -> str:
     if val is None:
         return "[dim]—[/]"
+    n = int(val)
+    if n >= 10_000:
+        return f"{n / 10_000:.1f}万"
+    return str(n)
+
+
+def _snap_fmt(val) -> str:
+    if val is None:
+        return "—"
     n = int(val)
     if n >= 10_000:
         return f"{n / 10_000:.1f}万"
