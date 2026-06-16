@@ -4,7 +4,6 @@ import atexit
 import sys
 import termios
 import time
-import tty
 from typing import Optional
 
 from rich.layout import Layout
@@ -32,8 +31,12 @@ _old_term: Optional[list] = None
 
 def _setup_terminal() -> None:
     global _old_term
-    _old_term = termios.tcgetattr(_fd)
-    tty.setraw(_fd)
+    attrs = termios.tcgetattr(_fd)
+    _old_term = list(attrs)
+    attrs[3] &= ~(termios.ECHO | termios.ICANON | termios.ISIG)
+    attrs[6][termios.VMIN] = 1
+    attrs[6][termios.VTIME] = 0
+    termios.tcsetattr(_fd, termios.TCSANOW, attrs)
 
 
 def _restore_terminal() -> None:
@@ -89,7 +92,7 @@ def _build_table(status_list: list, total_records: int) -> Table:
 def _make_layout(table: Table, input_mode: Optional[str], input_buffer: str) -> Layout:
     layout = Layout()
     layout.split_column(
-        Layout(Panel(table, subtitle=_HELP), name="main"),
+        Layout(Panel(table), name="main"),
         Layout(name="footer", size=3),
     )
     if input_mode:
@@ -115,7 +118,7 @@ def _find_bvid_by_id(status_list: list, idx: int) -> Optional[str]:
 
 
 def _parse_interval(raw: str) -> int:
-    if raw.isdigit():
+    if raw and raw.isdigit():
         return max(30, min(3600, int(raw)))
     return 300
 
@@ -130,9 +133,9 @@ def run_panel(state: MonitorState, cmd_queue: CommandQueue) -> None:
 
     try:
         with Live(
-            auto_refresh=False,
+            refresh_per_second=0,
             vertical_overflow="visible",
-            screen=True,
+            screen=False,
         ) as live:
             while state.running:
                 now = time.time()
@@ -153,6 +156,7 @@ def run_panel(state: MonitorState, cmd_queue: CommandQueue) -> None:
                     elif key == "\x03":
                         input_mode = None
                         input_buffer = ""
+                        pending_bvid = None
                     elif key in ("\r", "\n"):
                         if input_mode == "add_bvid":
                             bvid = _resolve_bvid(input_buffer)
@@ -183,7 +187,7 @@ def run_panel(state: MonitorState, cmd_queue: CommandQueue) -> None:
                     elif key.isprintable():
                         input_buffer += key
 
-                if now - last_refresh > 0.8 or key is not None:
+                if now - last_refresh > 1.0 or key is not None:
                     last_refresh = now
                     tasks = state.snapshot()
                     total = sum(t.record_count for t in tasks)
