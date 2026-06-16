@@ -28,6 +28,7 @@ app = typer.Typer(
     name="bili-monitor",
     help="Bilibili 视频数据监控工具",
     no_args_is_help=True,
+    context_settings={"help_option_names": ["-h", "--help"]},
 )
 
 
@@ -120,8 +121,6 @@ async def _cmd_create(
 
         if not inactive:
             await db.set_video_active(video_id, True)
-            await api.close()
-            await db.close()
             mgr = DaemonManager()
             if not mgr.status():
                 mgr.start()
@@ -164,7 +163,7 @@ async def _cmd_snap(
     db, api = await _init()
     try:
         targets: list[tuple[int, str]] = []
-        if all:
+        if all_tasks:
             tasks = await db.get_all_tasks()
             targets = [(t.video_id, t.bvid) for t in tasks if t.active]
             if not targets:
@@ -248,8 +247,6 @@ async def _cmd_start(
                 raise typer.Exit(1)
             await db.set_video_active(row["id"], True)
 
-        await api.close()
-        await db.close()
         mgr = DaemonManager()
         if all or bvid_or_name:
             if not mgr.status():
@@ -278,7 +275,7 @@ def stop(
     bvid_or_name: Optional[str] = typer.Argument(
         None, help="BV号或别名（不传则报错）"
     ),
-    all: bool = typer.Option(False, "--all", "-a", help="停用所有任务并关闭守护进程"),
+    all: bool = typer.Option(False, "--all", "-a", help="关闭守护进程（不改变任务活跃状态）"),
 ):
     """停用任务 / 关闭守护进程"""
     asyncio.run(_cmd_stop(bvid_or_name, all))
@@ -291,21 +288,13 @@ async def _cmd_stop(
 
     if all:
         mgr.stop()
-        db, api = await _init()
-        try:
-            tasks = await db.get_all_tasks()
-            for t in tasks:
-                if t.active:
-                    await db.set_video_active(t.video_id, False)
-        finally:
-            await _cleanup(db, api)
-        console.print("[green]✓[/] 已停用所有任务，守护进程已停止")
+        console.print("[green]✓[/] 守护进程已停止 [dim](任务活跃状态保持不变)[/]")
         return
 
     db, api = await _init()
     try:
         if not bvid_or_name:
-            console.print("[red]✗[/] 请指定 BV号/别名 (--all 停用所有)")
+            console.print("[red]✗[/] 请指定 BV号/别名 (--all 关闭守护进程)")
             raise typer.Exit(1)
 
         row = await db.find_video(bvid_or_name)
@@ -324,7 +313,6 @@ async def _cmd_stop(
         else:
             console.print(f"[green]✓[/] 已停用 [bold]{row['name']}[/]")
     finally:
-        await _cleanup(db, api)
         await _cleanup(db, api)
 
 

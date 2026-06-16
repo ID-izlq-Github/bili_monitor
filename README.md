@@ -55,8 +55,8 @@ pip install -e .
 ### 使用
 
 ```bash
-# 查看帮助
-python -m bili_monitor --help
+# 查看帮助（-h 或 --help）
+python -m bili_monitor -h
 
 # 注册新视频（自动激活 + 启动守护进程）
 python -m bili_monitor create BV1GJ411x7h7 --name rick
@@ -73,7 +73,7 @@ python -m bili_monitor list
 # 停用指定任务（无活跃任务时自动停守护进程）
 python -m bili_monitor stop rickroll
 
-# 停用所有任务 + 关守护进程
+# 停用守护进程（不改变任务活跃状态）
 python -m bili_monitor stop --all
 
 # 启动守护进程（加载所有活跃任务）
@@ -154,7 +154,7 @@ python -m bili_monitor stop [别名|BV号] [--all]
 | 用法 | 行为 |
 |------|------|
 | `stop rick` | 停用该任务；活跃数归零时自动停守护进程 |
-| `stop --all` | 停用所有任务 + 关闭守护进程 |
+| `stop --all` | 关闭守护进程（不改变任务活跃状态） |
 | `stop`（无参） | 报错提示（防误触） |
 
 ### `update` — 修改别名或间隔

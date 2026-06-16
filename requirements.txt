@@ -1,8 +1,4 @@
 typer>=0.9
 rich>=13
-aiohttp>=3.9
 matplotlib>=3.8
-seaborn>=0.13
-pandas>=2
 bilibili-api-python>=17
-loguru>=0.7
