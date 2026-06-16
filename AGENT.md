@@ -82,7 +82,9 @@ videos (
     uploader    TEXT NOT NULL,                 -- UP主
     created_at  TEXT DEFAULT (datetime('now','localtime')),
     active      INTEGER DEFAULT 0,             -- 是否活跃监控中
-    pubdate     TEXT                           -- 发布时间 (ISO, nullable)
+    pubdate     TEXT,                          -- 发布时间 (ISO, nullable)
+    duration    INTEGER,                       -- 视频长度 (秒)
+    tname       TEXT                            -- 分区 (如"知识"/"游戏"/"音乐")
 )
 
 -- 时间序列记录
@@ -97,7 +99,9 @@ records (
     danmaku     INTEGER,                        -- 弹幕数
     online      INTEGER,                        -- 同时在线 (可选)
     shares      INTEGER,                        -- 转发数 (可选)
-    rank        INTEGER                         -- 全站排名 (可选)
+    rank        INTEGER,                        -- 当前全站排名 (可选)
+    reply       INTEGER,                        -- 评论数
+    his_rank    INTEGER                         -- 历史最高排名 (可选)
 )
 
 -- 任务自定义间隔
@@ -121,8 +125,8 @@ CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
 - `start [bvid/name] [--all]`：激活任务 / 启动 daemon
 - `stop [bvid/name] [--all]`：停用任务 / 关 daemon
 - `update <bvid/name> [--name X] [--interval N]`：修改别名或间隔
-- `show <bvid/name> [--last N]`：查看最近记录
-- `list`：列出所有任务（含发布时间列）
+- `show <bvid/name> [--last N]`：查看最近记录（含评论、历史最高排名列）
+- `list`：列出所有任务（含发布时间、分区、时长列）
 - `export <bvid/name> [--format csv|json] [--output PATH]`：导出数据（含 bvid 列）
 - `import <file> --bvid <BV> [--format] [--dry-run] [--overwrite]`：导入 CSV/JSON 数据
 - `viz <bvid/name> [--metrics ...] [--type trend|ratio]`：生成可视化
@@ -131,7 +135,7 @@ CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
 ### `api/client.py` — Bilibili API 封装
 - 封装 `bilibili-api-python` 调用
 - 单例 `asyncio.Semaphore(1)` 保证全局序列化
-- 接口：`fetch_video_meta(bvid)`（标题/UP主/发布时间）、`fetch_record_data(bvid)`（统计数据）
+- 接口：`fetch_video_meta(bvid)`（标题/UP主/发布时间/时长/分区）、`fetch_record_data(bvid)`（统计：播放/点赞/投币/收藏/弹幕/评论/转发/排名）
 - `_parse_count()` 处理 `'4000+'`、`'1.2w'`、`'3.5K'` 等格式 → 整数
 - 参数校验：BV 号格式验证、URL 自动解析
 
