@@ -1,0 +1,34 @@
+# Byte-compiled
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Database
+*.db
+*.db-wal
+*.db-shm
+
+# Output (keep dirs, ignore files)
+output/image/*
+output/export/*
+!output/image/.gitkeep
+!output/export/.gitkeep
+
+# Environment
+.env
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+/tmp/

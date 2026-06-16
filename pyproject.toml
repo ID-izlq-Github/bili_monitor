@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bili-monitor"
+version = "0.1.0"
+description = "Bilibili 视频数据监控 CLI 工具"
+requires-python = ">=3.10"
+dependencies = [
+    "typer>=0.9",
+    "rich>=13",
+    "aiohttp>=3.9",
+    "matplotlib>=3.8",
+    "seaborn>=0.13",
+    "pandas>=2",
+    "bilibili-api-python>=17",
+    "loguru>=0.7",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.scripts]
+bili-monitor = "bili_monitor.cli:app"
