@@ -13,6 +13,8 @@ import matplotlib.dates as mdates
 from matplotlib.font_manager import FontProperties
 import numpy as np
 
+from rich.progress import Progress
+
 from bili_monitor.config import Settings
 from bili_monitor.db.database import Database
 
@@ -594,11 +596,21 @@ async def generate_report(
     name_label = name or bvid
     generated: list[Path] = []
 
-    for chart_name, func, min_records in _CHART_REGISTRY:
-        if len(deltas) < min_records:
-            continue
+    usable = [(cn, fn, mr) for cn, fn, mr in _CHART_REGISTRY
+              if len(deltas) >= mr]
+    if not usable:
+        return generated
 
-        fig, ax = plt.subplots(figsize=_FIGSIZE)
+    with Progress() as progress:
+        task = progress.add_task(
+            f"生成 {len(usable)} 张图表",
+            total=len(usable),
+        )
+
+        for chart_name, func, min_records in usable:
+            progress.update(task, description=f"正在生成 {chart_name}...")
+
+            fig, ax = plt.subplots(figsize=_FIGSIZE)
         ts_range = f"{timestamps[0].strftime('%m-%d %H:%M')} ~ {timestamps[-1].strftime('%m-%d %H:%M')}  [{len(rows)}条记录]"
         title = f"{name_label} · {chart_name}\n{ts_range}"
 
@@ -624,5 +636,6 @@ async def generate_report(
             pass
         finally:
             plt.close(fig)
+            progress.advance(task)
 
     return generated
