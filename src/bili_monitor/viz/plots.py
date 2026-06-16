@@ -369,19 +369,21 @@ def _chart_conversion(ax, binned, rows, timestamps, title):
     ax2.tick_params(axis="y", colors=_COLORS["danmaku"])
 
     for curve_x, curve_y, color, axis, y_off in [
-        (ts, like_rate, _COLORS["likes"], ax, 6),
-        (ts, coin_rate, _COLORS["coins"], ax, 2),
+        (ts, like_rate, _COLORS["likes"], ax, 2),
+        (ts, coin_rate, _COLORS["coins"], ax, 0),
         (ts, fav_rate, _COLORS["favorites"], ax, -2),
-        (ts, coin_like, _COLORS["danmaku"], ax2, 2),
-        (timestamps, cum_like_curve, _COLORS["likes"], ax, -6),
-        (timestamps, cum_coin_curve, _COLORS["coins"], ax, -10),
-        (timestamps, cum_fav_curve, _COLORS["favorites"], ax, -14),
+        (ts, coin_like, _COLORS["danmaku"], ax2, 0),
+        (timestamps, cum_like_curve, _COLORS["likes"], ax, -2),
+        (timestamps, cum_coin_curve, _COLORS["coins"], ax, -4),
+        (timestamps, cum_fav_curve, _COLORS["favorites"], ax, -6),
         (timestamps, cum_cl_curve, _COLORS["danmaku"], ax2, -2),
     ]:
         if curve_x and curve_y:
             axis.annotate(f"{curve_y[-1]:.3f}", xy=(curve_x[-1], curve_y[-1]),
-                          xytext=(4, y_off), textcoords="offset points",
-                          fontsize=6, color=color, va="center", alpha=0.9)
+                          xytext=(2, y_off), textcoords="offset points",
+                          fontsize=5.5, color=color, va="center", alpha=0.95,
+                          bbox=dict(boxstyle="round,pad=0.1", facecolor="white",
+                                  edgecolor=color, alpha=0.7, lw=0.5))
 
     l1, lb1 = ax.get_legend_handles_labels()
     l2, lb2 = ax2.get_legend_handles_labels()
