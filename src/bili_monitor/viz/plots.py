@@ -343,17 +343,17 @@ def _chart_conversion(ax, binned, rows, timestamps, title):
     cum_cl_curve   = [c / max(l, 1) for c, l in zip(cum_coins, cum_likes)]
 
     ax.plot(ts, like_rate, color=_COLORS["likes"], linewidth=1.8,
-            alpha=0.85, label="点赞率 (5min)")
+            alpha=0.85, label="点赞率 (10min)")
     ax.plot(timestamps, cum_like_curve, color=_COLORS["likes"], linewidth=1.2,
             linestyle="--", alpha=0.5, label="点赞率 累计")
 
     ax.plot(ts, coin_rate, color=_COLORS["coins"], linewidth=1.8,
-            alpha=0.85, label="投币率 (5min)")
+            alpha=0.85, label="投币率 (10min)")
     ax.plot(timestamps, cum_coin_curve, color=_COLORS["coins"], linewidth=1.2,
             linestyle="--", alpha=0.5, label="投币率 累计")
 
     ax.plot(ts, fav_rate, color=_COLORS["favorites"], linewidth=1.8,
-            alpha=0.85, label="收藏率 (5min)")
+            alpha=0.85, label="收藏率 (10min)")
     ax.plot(timestamps, cum_fav_curve, color=_COLORS["favorites"], linewidth=1.2,
             linestyle="--", alpha=0.5, label="收藏率 累计")
 
@@ -361,7 +361,7 @@ def _chart_conversion(ax, binned, rows, timestamps, title):
 
     ax2 = ax.twinx()
     ax2.plot(ts, coin_like, color=_COLORS["danmaku"], linewidth=1.8,
-             alpha=0.85, label="投币/点赞 (5min)")
+             alpha=0.85, label="投币/点赞 (10min)")
     ax2.plot(timestamps, cum_cl_curve, color=_COLORS["danmaku"], linewidth=1.2,
              linestyle="--", alpha=0.5, label="投币/点赞 累计")
     ax2.set_ylabel("投币/点赞", fontsize=10)
@@ -573,7 +573,7 @@ async def generate_report(
     timestamps = _ts(rows)
     deltas = _deltas(rows)
     deltas = [d for d in deltas if d["dt"] > 120]
-    binned_5 = _aggregate_binned(deltas, 5)
+    binned_10 = _aggregate_binned(deltas, 10)
     binned_30 = _aggregate_binned(deltas, 30)
     eff_duration = duration // max(videos, 1) if duration else None
 
@@ -608,7 +608,7 @@ async def generate_report(
                 elif chart_name == "02_互动增量":
                     func(ax, binned_30, title)
                 elif chart_name == "04_三连率":
-                    func(ax, binned_5, rows, timestamps, title)
+                    func(ax, binned_10, rows, timestamps, title)
                 elif chart_name in ("07_累计绝对值趋势", "01_播放与互动"):
                     func(ax, rows, timestamps, title)
                 else:
