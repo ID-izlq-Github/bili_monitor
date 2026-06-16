@@ -7,19 +7,18 @@ Bilibili 视频数据监控 CLI 工具。多视频并发监控（序列化请求
 ## 架构概览
 
 ```
-┌─────────────┐  typer CLI（11 子命令, 内置 --install-completion）
+┌─────────────┐  typer CLI（10 子命令, 内置 --install-completion）
 │   cli.py    │  create / delete / start / stop / update / show
-└──────┬──────┘  list / panel / export / viz / daemon status
+└──────┬──────┘  list / export / viz / daemon status
        │
        ▼
-┌──────────────┐  CommandQueue IPC + SIGUSR1
+┌──────────────┐  SIGUSR1 实时 reload
 │  scheduler   │◄──── asyncio.Semaphore(1) 序列化所有请求
-│  scheduler   │◄──── _check_external_changes() 同步DB变更 / SIGUSR1 立即 reload
+│  scheduler   │◄──── _check_external_changes() 同步DB变更
 └──────┬───────┘
        │
        ├──▶ api/client.py   ──▶ bilibili-api-python (HTTP)
        ├──▶ db/database.py  ──▶ sqlite3 (WAL, 别名查询, 迁移)
-       ├──▶ ui/panel.py     ──▶ rich.Live (4Hz auto-refresh, 独立线程)
        ├──▶ export/         ──▶ csv/json
        └──▶ viz/            ──▶ matplotlib + seaborn → output/image/
 ```
@@ -44,9 +43,7 @@ bilibili_record/
 │       │   ├── __init__.py
 │       │   ├── database.py          # SQLite 操作
 │       │   └── models.py            # 数据模型/常量
-│       ├── ui/
-│       │   ├── __init__.py
-│       │   └── panel.py             # rich 交互面板
+│       ├── ui/                     # （已移除，功能整合至 CLI）
 │       ├── export/
 │       │   ├── __init__.py
 │       │   └── exporter.py          # CSV/JSON 导出
@@ -107,7 +104,6 @@ CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
 - `update <bvid/name> [--name X] [--interval N]`：修改别名或间隔
 - `show <bvid/name> [--last N]`：查看最近记录
 - `list`：列出所有任务
-- `panel`：打开交互式 TUI 面板
 - `export <bvid/name> [--format csv|json] [--output PATH]`：导出数据
 - `viz <bvid/name> [--metrics ...] [--type trend|ratio]`：生成可视化
 - `daemon status`：查看守护进程状态
@@ -133,13 +129,6 @@ CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
 - 建表、插入记录、查询（按视频、时间范围）
 - 事务处理：批量插入时使用事务
 - 提供 `contextmanager` 确保连接正确关闭
-
-### `ui/panel.py` — 交互式 TUI 面板
-- 基于 `rich.live.Live` + `rich.table.Table`，主线程渲染
-- 调度器运行在独立后台线程（独立事件循环），通过 MonitorState + CommandQueue 通信
-- 显示：任务ID、视频名称、活跃状态、上次记录时间、记录数
-- 键盘操作：`a` 添加任务、`d <id>` 删除任务、`q` 退出
-- 输入时 `live.stop()` 退出 alt screen，输入结束后 `live.start()` 恢复，避免闪动
 
 ### `export/exporter.py` — 导出
 - CSV 导出：`csv.writer`，按字段顺序输出
@@ -167,20 +156,21 @@ CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
 ## 运行模式
 
 ```
-# 交互式 CLI
-$ python -m bili_monitor panel           # 打开 TUI 面板
+# 创建并自动激活
+$ python -m bili_monitor create BV1xx --name myvideo
 
-# 命令行直接操作
-$ python -m bili_monitor start BV1xx     # 添加任务立刻返回（后台运行）
-$ python -m bili_monitor stop BV1xx      # 停止任务
-$ python -m bili_monitor list            # 列出任务
+# 查看记录
+$ python -m bili_monitor show myvideo --last 5
 
 # 导出与可视化
-$ python -m bili_monitor export BV1xx --format csv
-$ python -m bili_monitor viz BV1xx --metrics views,likes --type trend
+$ python -m bili_monitor export myvideo --format csv
+$ python -m bili_monitor viz myvideo --metrics views,likes --type trend
 
-# 守护进程模式
-$ python -m bili_monitor daemon start
+# 启用/停用
+$ python -m bili_monitor start myvideo
+$ python -m bili_monitor stop myvideo
+
+# 守护进程
 $ python -m bili_monitor daemon status
 ```
 
@@ -202,7 +192,6 @@ $ python -m bili_monitor daemon status
 | 请求序列化 | asyncio.Semaphore(1) | 轻量、精确控制、不依赖外部调度器 |
 | 调度器 | 自研 async tick loop | 轻量、完全控制、无外部依赖 |
 | DB 层 | stdlib sqlite3 | 零依赖、足够快（sync 非瓶颈） |
-| TUI | rich.live | 已有、渲染美观、交互友好 |
 | CLI 框架 | typer | 已有、类型安全、自动 --help |
 | 进程 | `python -m bili_monitor` | 用户要求，src layout 原生支持 |
 | 登录 | 不支持 | 用户确认，公开 API 即可 |
@@ -215,16 +204,15 @@ $ python -m bili_monitor daemon status
 2. 实现核心数据层 `db/` + `api/`
 3. 实现 `core/scheduler.py`
 4. 实现 `cli.py` 串联核心流程
-5. 实现 `ui/panel.py` 交互面板
-6. 实现 `export/` + `viz/`
-7. 实现 `daemon/`
-8. 集成测试
+5. 实现 `export/` + `viz/`
+6. 实现 `daemon/`
+7. 集成测试
 
 ## 已确认设计决策（2025-06-16）
 
 | 问题 | 决策 |
 |------|------|
-| TUI 交互 | 方案A：独占终端，rich.live + 键盘操作（类htop），`panel` 子命令进入 |
+
 | 数据库路径 | 默认 `./bili_monitor.db`，环境变量 `$BILI_DATA_DIR` 优先 |
 | 数据保留 | 手动提醒：记录数超180天或 DB >30MB 时提示清理；`config` 中可配自动清理策略 |
 | API 并发控制 | `api/client.py` 统一单例 wrapper，所有 bilibili-api-python 调用经其调度，全局 Semaphore(1) 保证串行 |

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -13,10 +12,8 @@ from rich.table import Table
 
 from bili_monitor.api.client import BiliAPIClient
 from bili_monitor.config import Settings
-from bili_monitor.core.scheduler import CommandQueue, MonitorState, Scheduler
 from bili_monitor.daemon.daemon import DaemonManager
 from bili_monitor.db.database import Database
-from bili_monitor.ui.panel import run_panel
 
 logging.basicConfig(
     level=logging.INFO,
@@ -376,42 +373,6 @@ async def _cmd_list() -> None:
         console.print(table)
     finally:
         await _cleanup(db, api)
-
-
-# ── panel ──────────────────────────────────────────────────────
-
-
-@app.command()
-def panel():
-    """打开交互式任务管理面板"""
-    state = MonitorState()
-    cmd_queue = CommandQueue()
-
-    def _run_scheduler() -> None:
-        async def _main() -> None:
-            cfg = Settings.get_instance()
-            db = Database(cfg.db_path)
-            await db.connect()
-            api = BiliAPIClient.get_instance()
-            await api.start()
-            sched = Scheduler(db, api, state, cmd_queue)
-            try:
-                await sched.run()
-            finally:
-                await api.close()
-                await db.close()
-        asyncio.run(_main())
-
-    thread = threading.Thread(target=_run_scheduler, daemon=True)
-    thread.start()
-
-    try:
-        run_panel(state, cmd_queue)
-    except (KeyboardInterrupt, EOFError):
-        pass
-    finally:
-        state.running = False
-        thread.join(timeout=5)
 
 
 # ── export ─────────────────────────────────────────────────────

@@ -10,7 +10,7 @@ from typing import Optional
 
 from bili_monitor.api.client import BiliAPIClient
 from bili_monitor.config import Settings
-from bili_monitor.core.scheduler import MonitorState, Scheduler, request_reload
+from bili_monitor.core.scheduler import Scheduler, request_reload
 from bili_monitor.db.database import Database
 
 logger = logging.getLogger("bili_monitor.daemon")
@@ -121,8 +121,7 @@ async def _daemon_main() -> None:
     await db.connect()
     api = BiliAPIClient.get_instance()
     await api.start()
-    state = MonitorState()
-    sched = Scheduler(db, api, state)
+    sched = Scheduler(db, api)
     try:
         await sched.run()
     finally:

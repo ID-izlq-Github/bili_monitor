@@ -22,7 +22,7 @@
 | **别名系统** | 每个视频绑定唯一别名，后续全部用别名操作，告别 BV 号 |
 | **灵活间隔** | 30s ~ 1h 可配置，默认 5min |
 | **多任务并发** | 最多 5 个任务，所有网络请求串行（绝不并发） |
-| **终端面板** | Rich 交互面板，实时查看任务状态，支持添加/删除 |
+| **记录查看** | `show` 命令终端直接查看最近记录，无需导文件 |
 | **SQLite 存储** | 零配置，自动建表，WAL 模式 |
 | **数据导出** | CSV / JSON 一键导出 |
 | **可视化** | matplotlib + seaborn 趋势图/比值图，自动保存 |
@@ -78,9 +78,6 @@ python -m bili_monitor stop --all
 
 # 启动守护进程（加载所有活跃任务）
 python -m bili_monitor start
-
-# 打开交互式面板
-python -m bili_monitor panel
 
 # 导出数据
 python -m bili_monitor export rick --format csv
@@ -166,16 +163,6 @@ python -m bili_monitor show <别名|BV号> [选项]
 |------|------|------|
 | `-l, --last` | 显示最近 N 条 | 10 |
 
-### `panel` — 交互面板
-
-在面板中：
-| 快捷键 | 功能 |
-|--------|------|
-| `a` | 添加任务（输入 BV 和间隔） |
-| `d` | 删除任务（输入任务 ID） |
-| `q` | 退出面板 |
-| `r` | 手动刷新 |
-
 ### `export` — 数据导出
 
 ```
@@ -254,7 +241,7 @@ bili_monitor/
 │   ├── db/
 │   │   ├── models.py           # 数据模型 & SQL
 │   │   └── database.py         # SQLite (WAL, async-safe)
-│   ├── ui/panel.py             # Rich TUI 交互面板
+│   ├── ui/                     # （已移除，功能整合至 CLI）
 │   ├── export/exporter.py      # CSV/JSON 导出
 │   ├── viz/plots.py            # matplotlib 可视化
 │   └── daemon/daemon.py        # Linux 守护进程

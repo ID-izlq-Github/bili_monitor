@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import collections
 import logging
-import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
@@ -36,75 +34,14 @@ class TaskInfo:
     active: bool = True
 
 
-@dataclass
-class TaskStatus:
-    bvid: str
-    name: str
-    title: str
-    uploader: str
-    active: bool
-    interval: int
-    last_run: Optional[str]
-    record_count: int
-    error_count: int
-
-
-class MonitorState:
-    def __init__(self) -> None:
-        self._lock = threading.RLock()
-        self._tasks: list[TaskStatus] = []
-        self._running = True
-
-    def snapshot(self) -> list[TaskStatus]:
-        with self._lock:
-            return list(self._tasks)
-
-    def update(self, tasks: list[TaskStatus]) -> None:
-        with self._lock:
-            self._tasks = tasks
-
-    @property
-    def running(self) -> bool:
-        with self._lock:
-            return self._running
-
-    @running.setter
-    def running(self, value: bool) -> None:
-        with self._lock:
-            self._running = value
-
-
-Command = tuple[str, tuple, dict]
-
-
-class CommandQueue:
-    def __init__(self) -> None:
-        self._queue: collections.deque[Command] = collections.deque()
-        self._lock = threading.Lock()
-
-    def put(self, action: str, args: tuple = (), kwargs: dict = None) -> None:
-        with self._lock:
-            self._queue.append((action, args, kwargs or {}))
-
-    def drain(self) -> list[Command]:
-        with self._lock:
-            items = list(self._queue)
-            self._queue.clear()
-            return items
-
-
 class Scheduler:
     def __init__(
         self,
         db: Database,
         api: BiliAPIClient,
-        state: MonitorState,
-        cmd_queue: CommandQueue | None = None,
     ) -> None:
         self._db = db
         self._api = api
-        self._state = state
-        self._cmd_queue = cmd_queue or CommandQueue()
         self._tasks: dict[str, TaskInfo] = {}
         self._running = False
         self._tick_interval = Settings.get_instance().tick_interval
@@ -133,17 +70,16 @@ class Scheduler:
     async def activate_task(self, bvid: str, interval: int) -> TaskInfo:
         meta = await self._api.fetch_video_meta(bvid)
         row = await self._db.find_video(bvid)
-        video_id = row["id"] if row else 0
-        if not video_id:
+        if not row:
             raise ValueError(f"视频 {bvid} 不存在，请先 create")
-        await self._db.save_interval(video_id, interval)
-        await self._db.set_video_active(video_id, True)
+        await self._db.save_interval(row["id"], interval)
+        await self._db.set_video_active(row["id"], True)
         task = TaskInfo(
             bvid=bvid,
-            name=row["name"] if row else bvid,
+            name=row["name"],
             title=meta.title,
             uploader=meta.uploader,
-            video_id=video_id,
+            video_id=row["id"],
             interval=interval,
             next_run=datetime.now(),
         )
@@ -157,9 +93,6 @@ class Scheduler:
         if row:
             await self._db.set_video_active(row["id"], False)
             await self._db.delete_interval(row["id"])
-            logger.info("已停用 [%s]", bvid)
-        elif task:
-            logger.info("已停用 [%s] (内存)", bvid)
         return task
 
     async def update_task(
@@ -178,13 +111,12 @@ class Scheduler:
                 task.interval = interval
             if name is not None:
                 task.name = name
-            logger.info(
-                "已更新 [%s] 间隔=%s 别名=%s", bvid, interval, name
-            )
         return task
 
     async def _check_external_changes(self) -> None:
         global _reload_requested
+        if not _reload_requested:
+            return
         _reload_requested = False
         rows = await self._db.get_all_tasks()
         db_map = {r.bvid: r for r in rows}
@@ -195,7 +127,8 @@ class Scheduler:
                 logger.info("[同步] %s 已从 DB 删除", bvid)
             elif db_row.active != task.active:
                 task.active = db_row.active
-                logger.info("[同步] %s active=%s", bvid, db_row.active)
+                if not task.active:
+                    logger.info("[同步] %s 已停用", bvid)
             else:
                 changed = False
                 if db_row.interval != task.interval:
@@ -207,23 +140,14 @@ class Scheduler:
                 if changed:
                     logger.info("[同步] %s 参数已更新", bvid)
 
-    def get_task(self, bvid: str) -> Optional[TaskInfo]:
-        return self._tasks.get(bvid)
-
-    def list_tasks(self) -> list[TaskInfo]:
-        return list(self._tasks.values())
-
     async def run(self) -> None:
-        global _reload_requested
         self._running = True
         await self.load_tasks()
         logger.info("调度器已启动 (tick=%gs)", self._tick_interval)
         tick_count = 0
         try:
             while self._running:
-                await self._process_commands()
                 await self._tick()
-                await self._sync_state()
                 tick_count += 1
                 if tick_count % 15 == 0 or _reload_requested:
                     await self._check_external_changes()
@@ -231,7 +155,7 @@ class Scheduler:
         except asyncio.CancelledError:
             pass
         finally:
-            await self._cleanup()
+            logger.info("调度器已停止")
 
     def stop(self) -> None:
         self._running = False
@@ -261,50 +185,6 @@ class Scheduler:
             _fmt(data.views), _fmt(data.likes),
             _fmt(data.coins), _fmt(data.favorites),
         )
-
-    async def _sync_state(self) -> None:
-        rows = await self._db.get_all_tasks()
-        status_list = []
-        for row in rows:
-            task = self._tasks.get(row.bvid)
-            err = task.error_count if task else 0
-            status_list.append(
-                TaskStatus(
-                    bvid=row.bvid,
-                    name=row.name,
-                    title=row.title,
-                    uploader=row.uploader,
-                    active=row.active,
-                    interval=row.interval,
-                    last_run=row.last_record,
-                    record_count=row.record_count,
-                    error_count=err,
-                )
-            )
-        self._state.update(status_list)
-
-    async def _process_commands(self) -> None:
-        for action, args, kwargs in self._cmd_queue.drain():
-            if action == "activate":
-                bvid, interval = args
-                try:
-                    await self.activate_task(bvid, interval)
-                except Exception as e:
-                    logger.warning("[面板] 激活 %s 失败: %s", bvid, e)
-            elif action == "deactivate":
-                (bvid,) = args
-                await self.deactivate_task(bvid)
-            elif action == "update":
-                bvid = args[0]
-                await self.update_task(
-                    bvid,
-                    kwargs.get("interval"),
-                    kwargs.get("name"),
-                )
-
-    async def _cleanup(self) -> None:
-        self._state.running = False
-        logger.info("调度器已停止")
 
 
 def _fmt(n: int) -> str:
