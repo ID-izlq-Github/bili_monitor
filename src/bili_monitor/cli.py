@@ -67,7 +67,7 @@ def create(
     name: str = typer.Option("", "--name", "-n", help="别名（不传则自动生成）"),
     interval: int = typer.Option(
         900, "--interval", "-i",
-        min=30, help="记录间隔（秒），大于3600时会二次确认",
+        min=60, help="记录间隔（秒），大于3600时会二次确认",
     ),
     inactive: bool = typer.Option(
         False, "--inactive", help="创建后不自动激活",

@@ -583,6 +583,7 @@ async def generate_report(
     weights = weights or DEFAULT_WEIGHTS.copy()
     timestamps = _ts(rows)
     deltas = _deltas(rows)
+    deltas = [d for d in deltas if d["dt"] > 120]
     hourly = _aggregate_hourly(deltas)
     eff_duration = duration // max(videos, 1) if duration else None
 
