@@ -16,14 +16,8 @@ from bili_monitor.api.client import BiliAPIClient as BAC
 from bili_monitor.core.scheduler import CommandQueue, MonitorState
 
 _HELP = Text.from_markup(
-    "[bold q][/] 退出    [bold a][/] 添加任务    [bold d <id>][/] 删除任务"
+    " [bold a][/] 添加任务    [bold d <id>][/] 删除任务    [bold q][/] 退出"
 )
-
-_PROMPTS = {
-    "add_bvid": "BV号或URL: ",
-    "add_interval": "间隔(秒, 默认300): ",
-    "delete": "要删除的任务ID: ",
-}
 
 _fd = sys.stdin.fileno()
 _old_term: Optional[list] = None
@@ -47,7 +41,7 @@ def _restore_terminal() -> None:
 atexit.register(_restore_terminal)
 
 
-def _get_key(timeout: float = 0.15) -> Optional[str]:
+def _get_key(timeout: float = 0.05) -> Optional[str]:
     import select
     if select.select([sys.stdin], [], [], timeout)[0]:
         try:
@@ -89,18 +83,12 @@ def _build_table(status_list: list, total_records: int) -> Table:
     return table
 
 
-def _make_layout(table: Table, input_mode: Optional[str], input_buffer: str) -> Layout:
+def _make_layout(table: Table, footer: Text) -> Layout:
     layout = Layout()
     layout.split_column(
         Layout(Panel(table), name="main"),
-        Layout(name="footer", size=3),
+        Layout(Panel(footer, style="dim"), name="footer", size=3),
     )
-    if input_mode:
-        prompt = _PROMPTS.get(input_mode, "> ")
-        footer = Panel(Text(prompt + input_buffer + "▌"), style="bold yellow")
-    else:
-        footer = Panel(_HELP, style="dim")
-    layout["footer"].update(footer)
     return layout
 
 
@@ -129,7 +117,7 @@ def run_panel(state: MonitorState, cmd_queue: CommandQueue) -> None:
     input_mode: Optional[str] = None
     input_buffer = ""
     pending_bvid: Optional[str] = None
-    last_refresh = 0.0
+    footer_text = _HELP
 
     try:
         with Live(
@@ -138,8 +126,7 @@ def run_panel(state: MonitorState, cmd_queue: CommandQueue) -> None:
             screen=False,
         ) as live:
             while state.running:
-                now = time.time()
-                key = _get_key(0.1)
+                key = _get_key(0.05)
 
                 if input_mode is None:
                     if key == "q" or key == "\x03":
@@ -147,9 +134,11 @@ def run_panel(state: MonitorState, cmd_queue: CommandQueue) -> None:
                     elif key == "a":
                         input_mode = "add_bvid"
                         input_buffer = ""
+                        footer_text = _HELP
                     elif key == "d":
                         input_mode = "delete"
                         input_buffer = ""
+                        footer_text = _HELP
                 else:
                     if key is None:
                         pass
@@ -157,6 +146,7 @@ def run_panel(state: MonitorState, cmd_queue: CommandQueue) -> None:
                         input_mode = None
                         input_buffer = ""
                         pending_bvid = None
+                        footer_text = _HELP
                     elif key in ("\r", "\n"):
                         if input_mode == "add_bvid":
                             bvid = _resolve_bvid(input_buffer)
@@ -167,6 +157,7 @@ def run_panel(state: MonitorState, cmd_queue: CommandQueue) -> None:
                             else:
                                 input_mode = None
                                 input_buffer = ""
+                                footer_text = _HELP
                         elif input_mode == "add_interval":
                             interval = _parse_interval(input_buffer)
                             if pending_bvid:
@@ -174,6 +165,7 @@ def run_panel(state: MonitorState, cmd_queue: CommandQueue) -> None:
                                 pending_bvid = None
                             input_mode = None
                             input_buffer = ""
+                            footer_text = _HELP
                         elif input_mode == "delete":
                             if input_buffer.isdigit():
                                 tasks = state.snapshot()
@@ -182,22 +174,25 @@ def run_panel(state: MonitorState, cmd_queue: CommandQueue) -> None:
                                     cmd_queue.put("remove", (bvid,))
                             input_mode = None
                             input_buffer = ""
+                            footer_text = _HELP
                     elif key == "\x7f":
                         input_buffer = input_buffer[:-1]
                     elif key.isprintable():
                         input_buffer += key
 
-                if now - last_refresh > 1.0 or key is not None:
-                    last_refresh = now
-                    tasks = state.snapshot()
-                    total = sum(t.record_count for t in tasks)
-                    layout = _make_layout(
-                        _build_table(tasks, total),
-                        input_mode,
-                        input_buffer,
-                    )
-                    live.update(layout)
-                    live.refresh()
+                if input_mode == "add_bvid":
+                    footer_text = Text(" 输入 BV 号或视频链接: " + input_buffer + "▌", no_wrap=True)
+                elif input_mode == "add_interval":
+                    footer_text = Text(" 输入间隔秒数 (30-3600): " + input_buffer + "▌", no_wrap=True)
+                elif input_mode == "delete":
+                    footer_text = Text(" 输入要删除的任务编号: " + input_buffer + "▌", no_wrap=True)
+
+                tasks = state.snapshot()
+                total = sum(t.record_count for t in tasks)
+                layout = _make_layout(_build_table(tasks, total), footer_text)
+                live.update(layout)
+                live.refresh()
+                time.sleep(0.01)
 
     except (KeyboardInterrupt, EOFError):
         pass
