@@ -145,6 +145,49 @@ class Scheduler:
             logger.info("已移除任务 [%s] %s", bvid, task.title)
         return task
 
+    async def update_task(self, bvid: str, interval: int) -> Optional[TaskInfo]:
+        task = self._tasks.get(bvid)
+        if task:
+            task.interval = interval
+            await self._db.save_interval(task.video_id, interval)
+            logger.info("已更新任务 [%s] 间隔 -> %ds", bvid, interval)
+        else:
+            rows = await self._db.get_all_tasks()
+            match = [r for r in rows if r.bvid == bvid]
+            if match:
+                await self._db.save_interval(match[0].video_id, interval)
+                await self._db.set_video_active(match[0].video_id, True)
+                meta = await self._api.fetch_video_meta(bvid)
+                video_id = match[0].video_id
+                task = TaskInfo(
+                    bvid=bvid,
+                    title=meta.title,
+                    uploader=meta.uploader,
+                    video_id=video_id,
+                    interval=interval,
+                    next_run=datetime.now(),
+                )
+                self._tasks[bvid] = task
+                logger.info("已加载并更新任务 [%s] 间隔 -> %ds", bvid, interval)
+        return task
+
+    async def _check_external_changes(self) -> None:
+        rows = await self._db.get_all_tasks()
+        db_map = {r.bvid: r for r in rows}
+        for bvid, task in list(self._tasks.items()):
+            db_row = db_map.get(bvid)
+            if db_row is None:
+                self._tasks.pop(bvid, None)
+                logger.info("任务 [%s] 已从 DB 删除", bvid)
+            elif db_row.active != task.active:
+                task.active = db_row.active
+                logger.info(
+                    "任务 [%s] 状态已同步: active=%s", bvid, db_row.active
+                )
+            elif db_row.interval != task.interval:
+                task.interval = db_row.interval
+                logger.info("任务 [%s] 间隔已同步: %ds", bvid, db_row.interval)
+
     def get_task(self, bvid: str) -> Optional[TaskInfo]:
         return self._tasks.get(bvid)
 
@@ -155,11 +198,15 @@ class Scheduler:
         self._running = True
         await self.load_tasks()
         logger.info("调度器已启动 (tick=%gs)", self._tick_interval)
+        tick_count = 0
         try:
             while self._running:
                 await self._process_commands()
                 await self._tick()
                 await self._sync_state()
+                tick_count += 1
+                if tick_count % 15 == 0:
+                    await self._check_external_changes()
                 await asyncio.sleep(self._tick_interval)
         except asyncio.CancelledError:
             pass

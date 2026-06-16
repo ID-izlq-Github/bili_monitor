@@ -3,24 +3,28 @@ from __future__ import annotations
 import atexit
 import sys
 import termios
-import threading
 import time
 import tty
-from typing import Optional, Tuple
+from typing import Optional
 
+from rich.layout import Layout
 from rich.live import Live
-from rich.panel import Panel as RichPanel
+from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from bili_monitor.api.client import BiliAPIClient as BAC
 from bili_monitor.core.scheduler import CommandQueue, MonitorState
 
 _HELP = Text.from_markup(
-    "[bold q][/] 退出  "
-    "[bold a][/] 添加任务  "
-    "[bold d <id>][/] 删除任务  "
-    "[bold r][/] 刷新"
+    "[bold q][/] 退出    [bold a][/] 添加任务    [bold d <id>][/] 删除任务"
 )
+
+_PROMPTS = {
+    "add_bvid": "BV号或URL: ",
+    "add_interval": "间隔(秒, 默认300): ",
+    "delete": "要删除的任务ID: ",
+}
 
 _fd = sys.stdin.fileno()
 _old_term: Optional[list] = None
@@ -50,32 +54,7 @@ def _get_key(timeout: float = 0.15) -> Optional[str]:
     return None
 
 
-def _read_line(prompt: str, timeout: float = 0.15) -> Optional[str]:
-    chars: list[str] = []
-    while True:
-        ch = _get_key(timeout)
-        if ch is None:
-            continue
-        if ch in ("\r", "\n"):
-            break
-        if ch == "\x03":
-            return None
-        if ch == "\x7f":
-            if chars:
-                chars.pop()
-            sys.stdout.write("\b \b")
-            sys.stdout.flush()
-            continue
-        chars.append(ch)
-        sys.stdout.write(ch)
-        sys.stdout.flush()
-    return "".join(chars).strip()
-
-
-def _build_table(
-    status_list: list,
-    total_records: int,
-) -> Table:
+def _build_table(status_list: list, total_records: int) -> Table:
     table = Table(
         header_style="bold cyan",
         border_style="blue",
@@ -107,22 +86,46 @@ def _build_table(
     return table
 
 
-def _find_bvid_by_id(
-    status_list: list, idx: int
-) -> Optional[str]:
+def _make_layout(table: Table, input_mode: Optional[str], input_buffer: str) -> Layout:
+    layout = Layout()
+    layout.split_column(
+        Layout(Panel(table, subtitle=_HELP), name="main"),
+        Layout(name="footer", size=3),
+    )
+    if input_mode:
+        prompt = _PROMPTS.get(input_mode, "> ")
+        footer = Panel(Text(prompt + input_buffer + "▌"), style="bold yellow")
+    else:
+        footer = Panel(_HELP, style="dim")
+    layout["footer"].update(footer)
+    return layout
+
+
+def _resolve_bvid(raw: str) -> Optional[str]:
+    try:
+        return BAC.resolve_bvid(raw)
+    except ValueError:
+        return None
+
+
+def _find_bvid_by_id(status_list: list, idx: int) -> Optional[str]:
     if 1 <= idx <= len(status_list):
         return status_list[idx - 1].bvid
     return None
 
 
-def run_panel(
-    state: MonitorState,
-    cmd_queue: CommandQueue,
-) -> None:
+def _parse_interval(raw: str) -> int:
+    if raw.isdigit():
+        return max(30, min(3600, int(raw)))
+    return 300
+
+
+def run_panel(state: MonitorState, cmd_queue: CommandQueue) -> None:
     _setup_terminal()
 
-    total_records = 0
-    buffer = ""
+    input_mode: Optional[str] = None
+    input_buffer = ""
+    pending_bvid: Optional[str] = None
     last_refresh = 0.0
 
     try:
@@ -135,58 +138,63 @@ def run_panel(
                 now = time.time()
                 key = _get_key(0.1)
 
-                if key == "q":
-                    break
+                if input_mode is None:
+                    if key == "q" or key == "\x03":
+                        break
+                    elif key == "a":
+                        input_mode = "add_bvid"
+                        input_buffer = ""
+                    elif key == "d":
+                        input_mode = "delete"
+                        input_buffer = ""
+                else:
+                    if key is None:
+                        pass
+                    elif key == "\x03":
+                        input_mode = None
+                        input_buffer = ""
+                    elif key in ("\r", "\n"):
+                        if input_mode == "add_bvid":
+                            bvid = _resolve_bvid(input_buffer)
+                            if bvid:
+                                pending_bvid = bvid
+                                input_mode = "add_interval"
+                                input_buffer = ""
+                            else:
+                                input_mode = None
+                                input_buffer = ""
+                        elif input_mode == "add_interval":
+                            interval = _parse_interval(input_buffer)
+                            if pending_bvid:
+                                cmd_queue.put("add", (pending_bvid, interval))
+                                pending_bvid = None
+                            input_mode = None
+                            input_buffer = ""
+                        elif input_mode == "delete":
+                            if input_buffer.isdigit():
+                                tasks = state.snapshot()
+                                bvid = _find_bvid_by_id(tasks, int(input_buffer))
+                                if bvid:
+                                    cmd_queue.put("remove", (bvid,))
+                            input_mode = None
+                            input_buffer = ""
+                    elif key == "\x7f":
+                        input_buffer = input_buffer[:-1]
+                    elif key.isprintable():
+                        input_buffer += key
 
-                if key == "a":
-                    live.update(Text("\n输入 BV号或URL: ", style="bold yellow"))
-                    bvid = _read_line("", timeout=0.1)
-                    if bvid:
-                        live.update(
-                            Text("\n输入间隔(秒，默认300): ", style="bold yellow")
-                        )
-                        interval_str = _read_line("", timeout=0.1)
-                        interval = 300
-                        if interval_str and interval_str.isdigit():
-                            interval = max(
-                                30,
-                                min(3600, int(interval_str)),
-                            )
-                        from bili_monitor.api.client import BiliAPIClient as BAC
-                        try:
-                            BV = BAC.resolve_bvid(bvid)
-                            cmd_queue.put("add", (BV, interval))
-                        except ValueError:
-                            pass
-                    _restore_terminal()
-                    _setup_terminal()
-
-                if key == "r":
-                    pass
-
-                if key == "d":
-                    live.update(
-                        Text("\n输入要删除的任务ID: ", style="bold yellow")
-                    )
-                    id_str = _read_line("", timeout=0.1)
-                    if id_str and id_str.isdigit():
-                        tasks = state.snapshot()
-                        bvid = _find_bvid_by_id(tasks, int(id_str))
-                        if bvid:
-                            cmd_queue.put("remove", (bvid,))
-                    _restore_terminal()
-                    _setup_terminal()
-
-                if key == "\x03":
-                    break
-
-                if now - last_refresh > 1.0:
+                if now - last_refresh > 0.8 or key is not None:
                     last_refresh = now
                     tasks = state.snapshot()
-                    total_records = sum(t.record_count for t in tasks)
-                    table = _build_table(tasks, total_records)
-                    live.update(RichPanel(table, subtitle=_HELP))
+                    total = sum(t.record_count for t in tasks)
+                    layout = _make_layout(
+                        _build_table(tasks, total),
+                        input_mode,
+                        input_buffer,
+                    )
+                    live.update(layout)
                     live.refresh()
+
     except (KeyboardInterrupt, EOFError):
         pass
     finally:

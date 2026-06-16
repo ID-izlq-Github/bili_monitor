@@ -119,6 +119,40 @@ async def _cmd_stop(bvid: str) -> None:
         await _cleanup(db, api)
 
 
+# ── update ─────────────────────────────────────────────────────
+
+
+@app.command()
+def update(
+    bvid: str = typer.Argument(..., help="BV号"),
+    interval: int = typer.Option(
+        300, "--interval", "-i",
+        min=30, max=3600,
+        help="新的记录间隔（秒）",
+    ),
+):
+    """修改监控任务的参数（如记录间隔）"""
+    asyncio.run(_cmd_update(bvid, interval))
+
+
+async def _cmd_update(bvid: str, interval: int) -> None:
+    db, api = await _init()
+    try:
+        bvid = BiliAPIClient.resolve_bvid(bvid)
+        tasks = await db.get_all_tasks()
+        match = [t for t in tasks if t.bvid == bvid]
+        if not match:
+            console.print(f"[red]✗[/] 未找到任务 [bold]{bvid}[/]")
+            raise typer.Exit(1)
+        await db.save_interval(match[0].video_id, interval)
+        await db.set_video_active(match[0].video_id, True)
+        console.print(
+            f"[green]✓[/] 已更新 [bold]{bvid}[/] 间隔 -> [bold]{interval}s[/]"
+        )
+    finally:
+        await _cleanup(db, api)
+
+
 # ── list ────────────────────────────────────────────────────────
 
 

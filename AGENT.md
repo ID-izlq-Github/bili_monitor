@@ -7,19 +7,19 @@ Bilibili 视频数据监控 CLI 工具。多视频并发监控（序列化请求
 ## 架构概览
 
 ```
-┌─────────────┐  typer CLI 入口
+┌─────────────┐  typer CLI 入口（含内置 --install-completion）
 │   cli.py    │
 └──────┬──────┘
        │
        ▼
-┌─────────────┐  任务增删改查、生命周期管理
-│  scheduler  │
-│  scheduler  │◄──── asyncio.Semaphore(1) 序列化所有请求
-└──────┬──────┘
+┌──────────────┐  任务增删改查 + CommandQueue IPC
+│  scheduler   │◄──── asyncio.Semaphore(1) 序列化所有请求
+│  scheduler   │◄──── 每30s _check_external_changes() 同步DB变更
+└──────┬───────┘
        │
        ├──▶ api/client.py   ──▶ bilibili-api-python (HTTP)
        ├──▶ db/database.py  ──▶ sqlite3 (stdlib)
-       ├──▶ ui/panel.py     ──▶ rich.Live 交互面板
+       ├──▶ ui/panel.py     ──▶ rich.Live 交互面板（独立线程）
        ├──▶ export/         ──▶ csv/json
        └──▶ viz/            ──▶ matplotlib + seaborn → output/image/
 ```
@@ -101,6 +101,7 @@ CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
 ### `cli.py` — CLI 入口
 - typer command group，包含子命令
 - `start <bvid/url>`：添加监控任务
+- `update <bvid> [--interval]`：修改任务参数（同一 BV 重复 start 也可更新）
 - `stop <bvid/id>`：停止监控任务
 - `list`：列出所有任务
 - `panel`：打开交互式 TUI 面板
@@ -115,10 +116,12 @@ CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
 - 参数校验：BV号格式验证、URL 自动解析
 
 ### `core/scheduler.py` — 核心调度器
-- 管理监控任务生命周期（添加/删除/暂停/恢复）
-- 主循环：每 ~5s tick，检查各任务到期时间，到期则执行记录
+- 管理监控任务生命周期（添加/删除/暂停/恢复/更新）
+- 主循环：每 ~2s tick，检查各任务到期时间，到期则执行记录
 - warp-around Semaphore(1) 保证所有网络请求串行
 - 状态管理：记录每个任务的下次执行时间、执行次数、错误计数
+- CommandQueue 线程安全命令队列，支持面板/外部 IPC
+- `_check_external_changes()` 每 30s 对比 DB 同步 active/interval 变更
 - 最大 5 个并发任务
 - 信号处理：SIGINT/SIGTERM 优雅退出
 
@@ -129,10 +132,11 @@ CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
 - 提供 `contextmanager` 确保连接正确关闭
 
 ### `ui/panel.py` — 交互式 TUI 面板
-- 基于 `rich.live.Live` + `rich.table.Table`
+- 基于 `rich.live.Live` + `rich.table.Table`，主线程渲染
+- 调度器运行在独立后台线程（独立事件循环），通过 MonitorState + CommandQueue 通信
 - 显示：任务ID、视频名称、活跃状态、上次记录时间、记录数
-- 键盘操作：`d<id>` 删除任务、`a<BV>` 添加任务、`r` 刷新、`q` 退出
-- 后台线程读取 scheduler 状态，主线程渲染 UI
+- 键盘操作：`a` 添加任务、`d <id>` 删除任务、`q` 退出
+- 输入时 `live.stop()` 退出 alt screen，输入结束后 `live.start()` 恢复，避免闪动
 
 ### `export/exporter.py` — 导出
 - CSV 导出：`csv.writer`，按字段顺序输出

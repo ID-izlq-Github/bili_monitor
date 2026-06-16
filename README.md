@@ -22,6 +22,7 @@
 | **灵活间隔** | 30s ~ 1h 可配置，默认 5min |
 | **多任务并发** | 最多 5 个任务，所有网络请求串行（绝不并发） |
 | **终端面板** | Rich 交互面板，实时查看任务状态，支持添加/删除 |
+| **参数修改** | `update` 命令随时修改记录间隔，daemon 模式下 30s 内自动同步 |
 | **SQLite 存储** | 零配置，自动建表，WAL 模式 |
 | **数据导出** | CSV / JSON 一键导出 |
 | **可视化** | matplotlib + seaborn 趋势图/比值图，自动保存 |
@@ -59,6 +60,9 @@ python -m bili_monitor start BV1GJ411x7h7 --interval 300
 # 列出所有任务
 python -m bili_monitor list
 
+# 修改任务参数（间隔等）
+python -m bili_monitor update BV1GJ411x7h7 --interval 600
+
 # 停止指定任务
 python -m bili_monitor stop BV1GJ411x7h7
 
@@ -77,6 +81,23 @@ python -m bili_monitor daemon start
 python -m bili_monitor daemon status
 python -m bili_monitor daemon stop
 ```
+
+### Shell 自动补全
+
+typer 内置了命令和选项的自动补全，支持 bash / zsh / fish / powershell：
+
+```bash
+# 查看补全脚本
+python -m bili_monitor --show-completion
+
+# 安装补全（一次安装，永久生效）
+python -m bili_monitor --install-completion
+
+# 如果使用 bili-monitor 入口命令，补全体验更佳
+bili-monitor --install-completion
+```
+
+补全范围：所有子命令名、选项名、枚举选项值（`csv`/`json`、`trend`/`ratio`）。
 
 ---
 
@@ -99,6 +120,24 @@ python -m bili_monitor start <BV号/URL> [选项]
 https://www.bilibili.com/video/BV1GJ411x7h7
 www.bilibili.com/video/BV1GJ411x7h7
 BV1GJ411x7h7
+```
+
+### `update` — 修改任务
+
+```
+python -m bili_monitor update <BV号> [选项]
+```
+
+| 参数 | 说明 | 默认 |
+|------|------|------|
+| `-i, --interval` | 新的记录间隔（秒） | 300 |
+
+> 同一个 BV 重复 `start` 也会更新间隔。daemon 模式下约 30s 内自动同步。
+
+### `stop` — 停止监控
+
+```
+python -m bili_monitor stop <BV号>
 ```
 
 ### `panel` — 交互面板
