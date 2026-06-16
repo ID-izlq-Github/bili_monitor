@@ -156,7 +156,30 @@ def _deltas(rows):
     return deltas
 
 
-# ── Chart 1: 核心趋势 ─────────────────────────────────────────
+def _sparse_xticks(ax, labels, max_labels=10):
+    n = len(labels)
+    step = max(1, (n + max_labels - 1) // max_labels)
+    indices = list(range(0, n, step))
+    ax.set_xticks(indices)
+    ax.set_xticklabels([labels[i] for i in indices],
+                       rotation=30, ha="right", fontsize=7)
+
+
+def _aggregate_hourly(deltas):
+    from collections import OrderedDict
+    buckets: dict[str, dict] = {}
+    for d in deltas:
+        h = d["timestamp"].replace(minute=0, second=0, microsecond=0)
+        key = h.isoformat()
+        if key not in buckets:
+            buckets[key] = {"timestamp": h, "Δviews": 0, "Δshares": 0, "count": 0}
+        buckets[key]["Δviews"] += d["Δviews"]
+        buckets[key]["Δshares"] += d["Δshares"]
+        buckets[key]["count"] += 1
+    return sorted(buckets.values(), key=lambda x: x["timestamp"])
+
+
+# ── Chart 1: 播放与互动 ───────────────────────────────────────
 
 def _chart_trend(ax, rows, timestamps, title):
     view_vals = [r["views"] or 0 for r in rows]
@@ -168,44 +191,38 @@ def _chart_trend(ax, rows, timestamps, title):
     ax.tick_params(axis="y", colors=_COLORS["views"])
 
     ax2 = ax.twinx()
-    for metric, key in [("likes", "likes"), ("coins", "coins"), ("favorites", "favorites")]:
+    for metric, key in [("likes", "likes"), ("coins", "coins")]:
         vals = [r[metric] or 0 for r in rows]
         ax2.plot(timestamps, vals, color=_COLORS[key],
                  linewidth=1.5, marker="o", markersize=2.5,
                  alpha=0.85, label=_CN[key])
-    ax2.set_ylabel("互动量", fontsize=10)
+    ax2.relim()
+    ax2.autoscale()
+    ax2.set_ylabel("点赞 · 投币", fontsize=10)
 
     l1, lb1 = ax.get_legend_handles_labels()
     l2, lb2 = ax2.get_legend_handles_labels()
-    ax.legend(l1 + l2, lb1 + lb2, loc="upper left", framealpha=0.9, fontsize=9)
+    ax.legend(l1 + l2, lb1 + lb2, loc="upper left",
+              framealpha=0.9, fontsize=9, zorder=5)
     _style_ax(ax, title)
 
 
-# ── Chart 2: 互动增量脉冲 ─────────────────────────────────────
+# ── Chart 2: 互动增量 ─────────────────────────────────────────
 
 def _chart_interaction_pulse(ax, deltas, title):
     metrics = ["Δlikes", "Δcoins", "Δfavorites", "Δdanmaku", "Δreply"]
     labels = [_CN[m.lstrip("Δ")] for m in metrics]
     colors = [_COLORS[m.lstrip("Δ")] for m in metrics]
-    timestamps = [d["timestamp"] for d in deltas]
+    ts = [d["timestamp"] for d in deltas]
 
-    x = np.arange(len(deltas))
-    n = len(metrics)
-    w = 0.12
-    for i, (m, c) in enumerate(zip(metrics, colors)):
-        vals = [max(d[m], 0) for d in deltas]
-        offset = x + (i - n / 2 + 0.5) * w
-        bars = ax.bar(offset, vals, w, color=c, alpha=0.85, label=labels[i])
-        edge_color = matplotlib.colors.to_rgba(c, 0.3)
-        for bar in bars:
-            bar.set_edgecolor(edge_color)
-            bar.set_linewidth(0.5)
+    vals = []
+    for m in metrics:
+        vals.append([max(d[m], 0) for d in deltas])
 
-    ax.set_xticks(x)
-    ax.set_xticklabels([d["timestamp"].strftime("%m-%d %H:%M")
-                        for d in deltas], rotation=30, ha="right", fontsize=7)
+    ax.stackplot(ts, vals, labels=labels, colors=colors, alpha=0.8)
+    _sparse_xticks(ax, [t.strftime("%m-%d %H:%M") for t in ts])
     ax.set_ylabel("增量", fontsize=10)
-    ax.legend(loc="upper left", framealpha=0.9, fontsize=8, ncol=2)
+    ax.legend(loc="upper left", framealpha=0.9, fontsize=8)
     _style_ax(ax, title)
     ax.set_xlabel("")
 
@@ -265,84 +282,53 @@ def _chart_hds(ax, deltas, weights, title):
     _style_ax(ax, title)
 
 
-# ── Chart 4: 三连转化比 ────────────────────────────────────────
+# ── Chart 4: 三连率 ───────────────────────────────────────────
 
 def _chart_conversion(ax, deltas, title):
     metrics = ["Δlikes", "Δcoins", "Δfavorites"]
     labels = [_CN[m.lstrip("Δ")] + "/播放" for m in metrics]
     colors = [_COLORS[m.lstrip("Δ")] for m in metrics]
 
-    x, ts, groups = [], [], []
-    for i, d in enumerate(deltas):
+    ts, groups = [], []
+    for d in deltas:
         if d["Δviews"] <= 0:
             continue
         vals = [max(d[m], 0) / max(d["Δviews"], 1) for m in metrics]
         groups.append(vals)
         ts.append(d["timestamp"])
-        x.append(len(x))
 
     if not groups:
         ax.text(0.5, 0.5, "数据不足", ha="center", va="center", fontsize=14, color="#999")
         _style_ax(ax, title)
         return
 
-    n = len(metrics)
-    w = 0.2
-    for i in range(n):
-        vals = [g[i] for g in groups]
-        offset = np.array(x) + (i - n / 2 + 0.5) * w
-        bars = ax.bar(offset, vals, w, color=colors[i], alpha=0.85, label=labels[i])
-        for bar in bars:
-            bar.set_edgecolor(matplotlib.colors.to_rgba(colors[i], 0.3))
-            bar.set_linewidth(0.5)
+    for i in range(len(metrics)):
+        line_vals = [g[i] for g in groups]
+        ax.plot(ts, line_vals, color=colors[i], linewidth=1.8,
+                marker="o", markersize=3, alpha=0.8, label=labels[i])
 
-    ax.set_xticks(x)
-    ax.set_xticklabels([t.strftime("%m-%d %H:%M") for t in ts],
-                       rotation=30, ha="right", fontsize=7)
+    _sparse_xticks(ax, [t.strftime("%m-%d %H:%M") for t in ts])
     ax.set_ylabel("比值", fontsize=10)
     ax.legend(loc="upper left", framealpha=0.9, fontsize=9)
+    ax.axhline(y=0, color="#cccccc", linewidth=0.8, linestyle="--")
     _style_ax(ax, title)
     ax.set_xlabel("")
 
 
-# ── Chart 5: VDR 观看留存深度 ────────────────────────────────
-
-def _chart_vdr(ax, deltas, duration, title):
-    if not duration:
-        ax.text(0.5, 0.5, "缺少视频时长信息", ha="center", va="center",
-                fontsize=14, color="#999")
-        _style_ax(ax, title)
-        return
-
-    vdr_vals, ts_colors, ts = [], [], []
-    for d in deltas:
-        online_avg = ((d.get("Δonline", 0)) if False else
-                      ((d.get("Δonline", 0)) is None))  # placeholder
-        # Expected delta requires online data from consecutive rows
-        pass
-
-    # Recompute properly with original row data
-    # This chart needs access to raw rows for online values
-    ax.text(0.5, 0.5, "需访问原始在线数据\n(VDR 依赖连续在线采样)",
-            ha="center", va="center", fontsize=12, color="#999",
-            transform=ax.transAxes)
-    _style_ax(ax, title)
-
-
-# ── Chart 5 (correct): VDR 观看留存深度 ──────────────────────
+# ── Chart 5: 观看留存率 ────────────────────────────────────────
 # Uses raw rows for online, not deltas
 
 def _chart_vdr_from_rows(ax, rows, deltas, duration, title):
     if not duration:
-        ax.text(0.5, 0.5, "缺少视频时长信息\n(duration 为空)",
-                ha="center", va="center", fontsize=13, color="#999")
+        ax.text(0.5, 0.5, "使用 `update xxx --refresh-meta`\n补全视频时长后即可生成",
+                ha="center", va="center", fontsize=12, color="#999")
         _style_ax(ax, title)
         return
 
     has_online = any(r.get("online") is not None for r in rows)
     if not has_online:
-        ax.text(0.5, 0.5, "缺少在线人数数据\n(onlne 全部为空)",
-                ha="center", va="center", fontsize=13, color="#999")
+        ax.text(0.5, 0.5, "暂无在线人数数据\n(新记录会自动采集)",
+                ha="center", va="center", fontsize=12, color="#999")
         _style_ax(ax, title)
         return
 
@@ -391,19 +377,19 @@ def _chart_vdr_from_rows(ax, rows, deltas, duration, title):
     ax.set_xlabel("")
 
 
-# ── Chart 6: 即时平均停留时长 ─────────────────────────────────
+# ── Chart 6: 平均观看时长 ──────────────────────────────────────
 
 def _chart_avg_stay(ax, rows, deltas, duration, title):
     if not duration:
-        ax.text(0.5, 0.5, "缺少视频时长信息\n(duration 为空)",
-                ha="center", va="center", fontsize=13, color="#999")
+        ax.text(0.5, 0.5, "使用 `update xxx --refresh-meta`\n补全视频时长后即可生成",
+                ha="center", va="center", fontsize=12, color="#999")
         _style_ax(ax, title)
         return
 
     has_online = any(r.get("online") is not None for r in rows)
     if not has_online:
-        ax.text(0.5, 0.5, "缺少在线人数数据\n(online 全部为空)",
-                ha="center", va="center", fontsize=13, color="#999")
+        ax.text(0.5, 0.5, "暂无在线人数数据\n(新记录会自动采集)",
+                ha="center", va="center", fontsize=12, color="#999")
         _style_ax(ax, title)
         return
 
@@ -446,19 +432,19 @@ def _chart_avg_stay(ax, rows, deltas, duration, title):
     _style_ax(ax, title)
 
 
-# ── Chart 7: 裂变传播散点 ─────────────────────────────────────
+# ── Chart 7: 传播效率 ─────────────────────────────────────────
 
 def _chart_scatter(ax, rows, deltas, duration, title):
     if not duration:
-        ax.text(0.5, 0.5, "缺少视频时长信息", ha="center", va="center",
-                fontsize=13, color="#999")
+        ax.text(0.5, 0.5, "使用 `update xxx --refresh-meta`\n补全视频时长后即可生成",
+                ha="center", va="center", fontsize=12, color="#999")
         _style_ax(ax, title)
         return
 
     has_online = any(r.get("online") is not None for r in rows)
     if not has_online:
-        ax.text(0.5, 0.5, "缺少在线人数数据", ha="center", va="center",
-                fontsize=13, color="#999")
+        ax.text(0.5, 0.5, "暂无在线人数数据\n(新记录会自动采集)",
+                ha="center", va="center", fontsize=12, color="#999")
         _style_ax(ax, title)
         return
 
@@ -505,7 +491,7 @@ def _chart_scatter(ax, rows, deltas, duration, title):
     _style_ax(ax, title)
 
 
-# ── Chart 8: 分享-播放时滞归因 ────────────────────────────────
+# ── Chart 8: 分享传播影响 ─────────────────────────────────────
 
 def _chart_share_lag(ax, deltas, title):
     if len(deltas) < 4:
@@ -514,18 +500,18 @@ def _chart_share_lag(ax, deltas, title):
         _style_ax(ax, title)
         return
 
-    ts = [d["timestamp"] for d in deltas]
-    dviews = [d["Δviews"] for d in deltas]
-    dshares = [d["Δshares"] for d in deltas]
+    hourly = _aggregate_hourly(deltas)
+    ts = [h["timestamp"] for h in hourly]
+    dviews = [h["Δviews"] for h in hourly]
+    dshares = [h["Δshares"] for h in hourly]
 
-    ax.plot(ts, dviews, color="#4C78A8", linewidth=2,
-            marker="o", markersize=4, alpha=0.85, label="播放增量", zorder=3)
+    ax.plot(ts, dviews, color=_COLORS["views"], linewidth=2,
+            alpha=0.85, label="播放增量", zorder=3)
 
     ax2 = ax.twinx()
     shifted = [0] + dshares[:-1]
-    ax2.plot(ts, shifted, color="#FF9DA6", linewidth=1.8,
-             marker="s", markersize=3.5, alpha=0.8,
-             linestyle="--", label="转发增量 (前置1期)", zorder=2)
+    ax2.plot(ts, shifted, color=_COLORS["shares"], linewidth=1.8,
+             alpha=0.8, linestyle="--", label="转发增量 (前置1小时)", zorder=2)
 
     best_shift = 0
     best_r = 0
@@ -541,34 +527,35 @@ def _chart_share_lag(ax, deltas, title):
             best_r = r
             best_shift = s
 
-    ax.text(0.98, 0.95, f"最佳时滞: {best_shift}期 (r={best_r:.3f})",
+    ax.text(0.98, 0.95, f"最佳时滞: {best_shift}小时 (r={best_r:.3f})",
             transform=ax.transAxes, ha="right", va="top",
             fontsize=10, color="#333",
             bbox=dict(boxstyle="round,pad=0.3", facecolor="#f0f0f0",
                       edgecolor="#ddd", alpha=0.8))
 
-    ax.set_ylabel("播放增量", fontsize=10, color=_COLORS["views"])
+    ax.set_ylabel("播放增量 (次/小时)", fontsize=10, color=_COLORS["views"])
     ax.tick_params(axis="y", colors=_COLORS["views"])
     ax2.set_ylabel("转发增量 (前置)", fontsize=10, color=_COLORS["shares"])
     ax2.tick_params(axis="y", colors=_COLORS["shares"])
 
     l1, lb1 = ax.get_legend_handles_labels()
     l2, lb2 = ax2.get_legend_handles_labels()
-    ax.legend(l1 + l2, lb1 + lb2, loc="upper left", framealpha=0.9, fontsize=9)
+    ax.legend(l1 + l2, lb1 + lb2, loc="upper left", framealpha=0.9, fontsize=9,
+              zorder=5)
     _style_ax(ax, title)
 
 
 # ── Report generator ───────────────────────────────────────────
 
 _CHART_REGISTRY: list[tuple[str, callable, int]] = [
-    ("01_核心趋势", _chart_trend, 0),
-    ("02_互动增量脉冲", _chart_interaction_pulse, 0),
-    ("03_加权质量指数(HDS)", _chart_hds, 0),
-    ("04_三连转化比", _chart_conversion, 0),
-    ("05_观看留存深度(VDR)", _chart_vdr_from_rows, 0),
-    ("06_即时平均停留时长", _chart_avg_stay, 0),
-    ("07_裂变传播散点", _chart_scatter, 15),
-    ("08_分享-播放时滞归因", _chart_share_lag, 20),
+    ("01_播放与互动", _chart_trend, 0),
+    ("02_互动增量", _chart_interaction_pulse, 0),
+    ("03_互动转化效率", _chart_hds, 0),
+    ("04_三连率", _chart_conversion, 0),
+    ("05_观看留存率", _chart_vdr_from_rows, 0),
+    ("06_平均观看时长", _chart_avg_stay, 0),
+    ("07_传播效率", _chart_scatter, 15),
+    ("08_分享传播影响", _chart_share_lag, 20),
 ]
 
 
@@ -615,13 +602,13 @@ async def generate_report(
         title = f"{name_label} · {chart_name}\n{ts_range}"
 
         try:
-            if chart_name in ("05_观看留存深度(VDR)", "06_即时平均停留时长"):
+            if chart_name in ("05_观看留存率", "06_平均观看时长"):
                 func(ax, rows, deltas, duration, title)
-            elif chart_name == "03_加权质量指数(HDS)":
+            elif chart_name == "03_互动转化效率":
                 func(ax, deltas, weights, title)
-            elif chart_name == "07_裂变传播散点":
+            elif chart_name == "07_传播效率":
                 func(ax, rows, deltas, duration, title)
-            elif chart_name in ("01_核心趋势",):
+            elif chart_name in ("01_播放与互动",):
                 func(ax, rows, timestamps, title)
             else:
                 func(ax, deltas, title)
