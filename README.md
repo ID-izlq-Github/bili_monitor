@@ -23,6 +23,7 @@
 | **灵活间隔** | 30s 起，不设上限（>3600s 时二次确认），默认 15min |
 | **多任务并发** | 最多 5 个任务，所有网络请求串行（绝不并发） |
 | **记录查看** | `show` 命令终端直接查看最近记录，无需导文件 |
+| **手动记录** | `snap` 命令随时手动记录一次，不等待调度器 |
 | **SQLite 存储** | 零配置，自动建表，WAL 模式 |
 | **数据导出** | CSV / JSON 一键导出（含 bvid 列，便于导入） |
 | **数据导入** | CSV / JSON 一键导入，自动去重，支持覆盖和预览 |
@@ -83,6 +84,12 @@ python -m bili_monitor export rick --format csv
 
 # 导入数据
 python -m bili_monitor import data.csv --bvid BV1GJ411x7h7
+
+# 手动立即记录一次（不等待调度器）
+python -m bili_monitor snap rick
+
+# 所有活跃任务各记录一次
+python -m bili_monitor snap --all
 
 # 生成可视化
 python -m bili_monitor viz rick --metrics views,likes,coins --type trend
@@ -172,6 +179,19 @@ python -m bili_monitor show <别名|BV号> [选项]
 | 参数 | 说明 | 默认 |
 |------|------|------|
 | `-l, --last` | 显示最近 N 条 | 10 |
+
+### `snap` — 立即记录
+
+```
+python -m bili_monitor snap <别名|BV号> [--all]
+```
+
+| 用法 | 行为 |
+|------|------|
+| `snap myvideo` | 指定视频立即记录一次 |
+| `snap --all` | 所有活跃任务各记录一次 |
+
+> 直接调用 API 读取当前数据并写入 DB，不经过调度器排队。
 
 ### `export` — 数据导出
 

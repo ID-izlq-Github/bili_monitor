@@ -7,7 +7,7 @@ Bilibili 视频数据监控 CLI 工具。多视频并发监控（序列化请求
 ## 架构概览
 
 ```
-┌─────────────┐  typer CLI（11 子命令, 内置 --install-completion）
+┌─────────────┐  typer CLI（12 子命令, 内置 --install-completion）
 │   cli.py    │  create / delete / start / stop / update / show
 └──────┬──────┘  list / export / import / viz / daemon status
        │
@@ -32,7 +32,7 @@ bilibili_record/
 │   └── bili_monitor/
 │       ├── __init__.py
 │       ├── __main__.py              # python -m bili_monitor
-│       ├── cli.py                   # typer CLI 入口（11 子命令）
+│   ├── cli.py                   # typer CLI 入口（12 子命令）
 │       ├── config.py                # 全局配置、常量
 │       ├── api/
 │       │   ├── __init__.py
@@ -112,10 +112,11 @@ CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
 ## 模块职责
 
 ### `cli.py` — CLI 入口
-- typer command group，11 个子命令
+- typer command group，12 个子命令
 - `create <bvid> [--name X] [--interval N] [--inactive]`：注册新视频，自动获取发布时数据
   - 发布时间在 7 天内的视频自动插入一条全 0 基线记录
   - 间隔 >3600s 时二次确认
+- `snap [bvid/name] [--all]`：立即记录一次数据（不经过调度器）
 - `delete <bvid/name>`：彻底删除视频及所有记录
 - `start [bvid/name] [--all]`：激活任务 / 启动 daemon
 - `stop [bvid/name] [--all]`：停用任务 / 关 daemon
@@ -199,6 +200,10 @@ $ python -m bili_monitor viz myvideo --metrics views,likes --type trend
 $ python -m bili_monitor viz myvideo --type subplot     # 独立Y轴
 $ python -m bili_monitor viz myvideo --type delta        # 增量图
 $ python -m bili_monitor viz myvideo --all               # 全类型
+
+# 立即记录
+$ python -m bili_monitor snap myvideo
+$ python -m bili_monitor snap --all
 
 # 启用/停用
 $ python -m bili_monitor start myvideo
