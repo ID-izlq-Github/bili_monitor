@@ -171,14 +171,15 @@ def _sparse_xticks(ax, labels, max_labels=10):
                        rotation=30, ha="right", fontsize=7)
 
 
-def _aggregate_hourly(deltas):
-    """按小时聚合所有 Δ 字段，返回排序后的 bucket 列表"""
+def _aggregate_binned(deltas, minutes=60):
+    """按指定间隔聚合所有 Δ 字段，返回排序后的 bucket 列表"""
     buckets: dict[str, dict] = {}
     for d in deltas:
-        h = d["timestamp"].replace(minute=0, second=0, microsecond=0)
-        key = h.isoformat()
+        base = d["timestamp"].replace(minute=0, second=0, microsecond=0)
+        slot = base.replace(minute=(base.minute // minutes) * minutes)
+        key = slot.isoformat()
         if key not in buckets:
-            b = {"timestamp": h}
+            b = {"timestamp": slot}
             for k, v in d.items():
                 if k.startswith("Δ"):
                     b[k] = 0
@@ -187,6 +188,10 @@ def _aggregate_hourly(deltas):
             if k.startswith("Δ"):
                 buckets[key][k] += d.get(k, 0) if isinstance(d.get(k), (int, float)) else 0
     return sorted(buckets.values(), key=lambda x: x["timestamp"])
+
+
+def _aggregate_hourly(deltas):
+    return _aggregate_binned(deltas, 60)
 
 
 def _smooth(values, window=3):
@@ -239,14 +244,13 @@ def _chart_interaction_pulse(ax, hourly, title):
     colors = [_COLORS[m.lstrip("Δ")] for m in metrics]
     ts = [h["timestamp"] for h in hourly]
 
-    win = max(2, min(5, len(hourly) // 3))
     for i, m in enumerate(metrics):
         raw = [h[m] for h in hourly]
-        vals = _smooth(raw, win)
+        vals = _smooth(raw, 2)
         ax.plot(ts, vals, color=colors[i], linewidth=1.8,
                 alpha=0.8, label=labels[i])
 
-    ax.set_ylabel("每小时增量 (平滑)", fontsize=10)
+    ax.set_ylabel("每15分钟增量", fontsize=10)
     ax.legend(loc="upper left", framealpha=0.9, fontsize=8)
     _style_ax(ax, title)
     ax.set_xlabel("")
@@ -274,8 +278,7 @@ def _chart_hds(ax, hourly, weights, title):
         _style_ax(ax, title)
         return
 
-    win = max(2, min(5, len(hds_raw) // 3))
-    hds_vals = _smooth(hds_raw, win)
+    hds_vals = _smooth(hds_raw, 2)
 
     ax.plot(ts, hds_vals, color="#E45756", linewidth=1.8,
             marker="o", markersize=4, alpha=0.8, label="HDS", zorder=3)
@@ -305,14 +308,14 @@ def _chart_hds(ax, hourly, weights, title):
                    zorder=5, label="异常点", edgecolors="white", linewidths=0.5)
 
     ax.axhline(y=0, color="#cccccc", linewidth=0.8, linestyle="--")
-    ax.set_ylabel("HDS 互动深度 (平滑)", fontsize=10)
+    ax.set_ylabel("HDS 互动深度", fontsize=10)
     ax.legend(loc="upper left", framealpha=0.9, fontsize=9)
     _style_ax(ax, title)
 
 
 # ── Chart 4: 三连率 ───────────────────────────────────────────
 
-def _chart_conversion(ax, hourly, title):
+def _chart_conversion(ax, hourly, last_row, title):
     ts = []
     like_rate, coin_rate, fav_rate, coin_like = [], [], [], []
     for h in hourly:
@@ -333,15 +336,15 @@ def _chart_conversion(ax, hourly, title):
         _style_ax(ax, title)
         return
 
-    total_dv = sum(h["Δviews"] for h in hourly)
-    total_dl = sum(h["Δlikes"] for h in hourly)
-    total_dc = sum(h["Δcoins"] for h in hourly)
-    total_df = sum(h["Δfavorites"] for h in hourly)
+    total_v = last_row["views"] or 1
+    total_l = last_row["likes"] or 0
+    total_c = last_row["coins"] or 0
+    total_f = last_row["favorites"] or 0
 
-    cum_like = total_dl / total_dv if total_dv > 0 else 0
-    cum_coin = total_dc / total_dv if total_dv > 0 else 0
-    cum_fav = total_df / total_dv if total_dv > 0 else 0
-    cum_cl = total_dc / total_dl if total_dl > 0 else 0
+    cum_like = total_l / max(total_v, 1)
+    cum_coin = total_c / max(total_v, 1)
+    cum_fav = total_f / max(total_v, 1)
+    cum_cl = total_c / max(total_l, 1)
 
     # Left axis: likes/views, coins/views, favorites/views
     ax.plot(ts, like_rate, color=_COLORS["likes"], linewidth=1.8,
@@ -432,7 +435,7 @@ def _chart_vdr_from_rows(ax, rows, deltas, duration, title):
     ax.legend(loc="upper left", framealpha=0.9, fontsize=9)
     ax.axhline(y=0, color="#cccccc", linewidth=0.8)
 
-    ax.text(0.98, 0.95, f"均值 VDR={avg_vdr:.2f} | online受API封顶影响",
+    ax.text(0.98, 0.95, f"均值 VDR={avg_vdr:.2f}",
             transform=ax.transAxes, ha="right", va="top",
             fontsize=9, color="#666",
             bbox=dict(boxstyle="round,pad=0.3", facecolor="#f0f0f0",
@@ -567,6 +570,7 @@ async def generate_report(
     deltas = _deltas(rows)
     deltas = [d for d in deltas if d["dt"] > 120]
     hourly = _aggregate_hourly(deltas)
+    binned_15 = _aggregate_binned(deltas, 15)
     eff_duration = duration // max(videos, 1) if duration else None
 
     base_dir = output or _report_dir(cfg, bvid, name, rows)
@@ -596,9 +600,11 @@ async def generate_report(
                 if chart_name in ("05_观看留存率", "06_平均观看时长"):
                     func(ax, rows, deltas, eff_duration, title)
                 elif chart_name == "03_互动转化效率":
-                    func(ax, hourly, weights, title)
-                elif chart_name in ("02_互动增量", "04_三连率"):
-                    func(ax, hourly, title)
+                    func(ax, binned_15, weights, title)
+                elif chart_name == "02_互动增量":
+                    func(ax, binned_15, title)
+                elif chart_name == "04_三连率":
+                    func(ax, hourly, rows[-1], title)
                 elif chart_name in ("07_累计绝对值趋势", "01_播放与互动"):
                     func(ax, rows, timestamps, title)
                 else:
