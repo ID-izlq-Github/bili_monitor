@@ -175,8 +175,9 @@ def _aggregate_binned(deltas, minutes=60):
     """按指定间隔聚合所有 Δ 字段，返回排序后的 bucket 列表"""
     buckets: dict[str, dict] = {}
     for d in deltas:
-        base = d["timestamp"].replace(minute=0, second=0, microsecond=0)
-        slot = base.replace(minute=(base.minute // minutes) * minutes)
+        t = d["timestamp"]
+        slot_minute = (t.minute // minutes) * minutes
+        slot = t.replace(minute=slot_minute, second=0, microsecond=0)
         key = slot.isoformat()
         if key not in buckets:
             b = {"timestamp": slot}
