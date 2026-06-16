@@ -123,7 +123,9 @@ _FIGSIZE = (14, 6)
 def _style_ax(ax, title: str, xlabel: str = "时间") -> None:
     ax.set_title(title, fontsize=12, loc="left", pad=14, fontweight="bold")
     ax.set_xlabel(xlabel)
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
+    locator = mdates.AutoDateLocator()
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
     ax.tick_params(labelsize=9)
 
 
@@ -169,16 +171,20 @@ def _sparse_xticks(ax, labels, max_labels=10):
 
 
 def _aggregate_hourly(deltas):
-    from collections import OrderedDict
+    """按小时聚合所有 Δ 字段，返回排序后的 bucket 列表"""
     buckets: dict[str, dict] = {}
     for d in deltas:
         h = d["timestamp"].replace(minute=0, second=0, microsecond=0)
         key = h.isoformat()
         if key not in buckets:
-            buckets[key] = {"timestamp": h, "Δviews": 0, "Δshares": 0, "count": 0}
-        buckets[key]["Δviews"] += d["Δviews"]
-        buckets[key]["Δshares"] += d["Δshares"]
-        buckets[key]["count"] += 1
+            b = {"timestamp": h}
+            for k, v in d.items():
+                if k.startswith("Δ"):
+                    b[k] = 0
+            buckets[key] = b
+        for k in buckets[key]:
+            if k.startswith("Δ"):
+                buckets[key][k] += d.get(k, 0) if isinstance(d.get(k), (int, float)) else 0
     return sorted(buckets.values(), key=lambda x: x["timestamp"])
 
 
@@ -212,40 +218,40 @@ def _chart_trend(ax, rows, timestamps, title):
 
 # ── Chart 2: 互动增量 ─────────────────────────────────────────
 
-def _chart_interaction_pulse(ax, deltas, title):
+def _chart_interaction_pulse(ax, hourly, title):
     metrics = ["Δlikes", "Δcoins", "Δfavorites", "Δdanmaku", "Δreply"]
     labels = [_CN[m.lstrip("Δ")] for m in metrics]
     colors = [_COLORS[m.lstrip("Δ")] for m in metrics]
-    ts = [d["timestamp"] for d in deltas]
+    ts = [h["timestamp"] for h in hourly]
 
-    vals = []
-    for m in metrics:
-        vals.append([max(d[m], 0) for d in deltas])
+    for i, m in enumerate(metrics):
+        vals = [h[m] for h in hourly]
+        ax.plot(ts, vals, color=colors[i], linewidth=1.8,
+                alpha=0.8, label=labels[i])
 
-    ax.stackplot(ts, vals, labels=labels, colors=colors, alpha=0.8)
-    _sparse_xticks(ax, [t.strftime("%m-%d %H:%M") for t in ts])
-    ax.set_ylabel("增量", fontsize=10)
+    ax.set_ylabel("每小时增量", fontsize=10)
     ax.legend(loc="upper left", framealpha=0.9, fontsize=8)
     _style_ax(ax, title)
     ax.set_xlabel("")
 
 
-# ── Chart 3: 加权质量指数 HDS ─────────────────────────────────
+# ── Chart 3: 互动转化效率 HDS ─────────────────────────────────
 
-def _chart_hds(ax, deltas, weights, title):
+def _chart_hds(ax, hourly, weights, title):
     hds_vals = []
     ts = []
-    for d in deltas:
-        if d["Δviews"] <= 0:
+    for h in hourly:
+        dv = h["Δviews"]
+        if dv <= 0:
             continue
         numer = 0.0
         for wkey, dfkey in HDS_TO_DELTA.items():
             w = weights.get(wkey, 0)
             if w:
-                numer += w * max(d.get(dfkey, 0), 0)
-        hds = numer / max(d["Δviews"], 1)
+                numer += w * max(h.get(dfkey, 0), 0)
+        hds = numer / max(dv, 1)
         hds_vals.append(hds)
-        ts.append(d["timestamp"])
+        ts.append(h["timestamp"])
 
     if not hds_vals:
         ax.text(0.5, 0.5, "数据不足", ha="center", va="center", fontsize=14, color="#999")
@@ -287,18 +293,19 @@ def _chart_hds(ax, deltas, weights, title):
 
 # ── Chart 4: 三连率 ───────────────────────────────────────────
 
-def _chart_conversion(ax, deltas, title):
+def _chart_conversion(ax, hourly, title):
     metrics = ["Δlikes", "Δcoins", "Δfavorites"]
     labels = [_CN[m.lstrip("Δ")] + "/播放" for m in metrics]
     colors = [_COLORS[m.lstrip("Δ")] for m in metrics]
 
     ts, groups = [], []
-    for d in deltas:
-        if d["Δviews"] <= 0:
+    for h in hourly:
+        dv = h["Δviews"]
+        if dv <= 0:
             continue
-        vals = [max(d[m], 0) / max(d["Δviews"], 1) for m in metrics]
+        vals = [max(h[m], 0) / max(dv, 1) for m in metrics]
         groups.append(vals)
-        ts.append(d["timestamp"])
+        ts.append(h["timestamp"])
 
     if not groups:
         ax.text(0.5, 0.5, "数据不足", ha="center", va="center", fontsize=14, color="#999")
@@ -310,7 +317,6 @@ def _chart_conversion(ax, deltas, title):
         ax.plot(ts, line_vals, color=colors[i], linewidth=1.8,
                 marker="o", markersize=3, alpha=0.8, label=labels[i])
 
-    _sparse_xticks(ax, [t.strftime("%m-%d %H:%M") for t in ts])
     ax.set_ylabel("比值", fontsize=10)
     ax.legend(loc="upper left", framealpha=0.9, fontsize=9)
     ax.axhline(y=0, color="#cccccc", linewidth=0.8, linestyle="--")
@@ -328,9 +334,9 @@ def _chart_vdr_from_rows(ax, rows, deltas, duration, title):
         _style_ax(ax, title)
         return
 
-    has_online = any(r["online"] is not None for r in rows)
-    if not has_online:
-        ax.text(0.5, 0.5, "暂无在线人数数据\n(新记录会自动采集)",
+    online_count = sum(1 for r in rows if r["online"] is not None)
+    if online_count < 5:
+        ax.text(0.5, 0.5, f"在线人数数据不足 (当前 {online_count} 条, 需要 ≥5 条)",
                 ha="center", va="center", fontsize=12, color="#999")
         _style_ax(ax, title)
         return
@@ -389,9 +395,9 @@ def _chart_avg_stay(ax, rows, deltas, duration, title):
         _style_ax(ax, title)
         return
 
-    has_online = any(r["online"] is not None for r in rows)
-    if not has_online:
-        ax.text(0.5, 0.5, "暂无在线人数数据\n(新记录会自动采集)",
+    online_count = sum(1 for r in rows if r["online"] is not None)
+    if online_count < 5:
+        ax.text(0.5, 0.5, f"在线人数数据不足 (当前 {online_count} 条, 需要 ≥5 条)",
                 ha="center", va="center", fontsize=12, color="#999")
         _style_ax(ax, title)
         return
@@ -444,9 +450,9 @@ def _chart_scatter(ax, rows, deltas, duration, title):
         _style_ax(ax, title)
         return
 
-    has_online = any(r["online"] is not None for r in rows)
-    if not has_online:
-        ax.text(0.5, 0.5, "暂无在线人数数据\n(新记录会自动采集)",
+    online_count = sum(1 for r in rows if r["online"] is not None)
+    if online_count < 5:
+        ax.text(0.5, 0.5, f"在线人数数据不足 (当前 {online_count} 条, 需要 ≥5 条)",
                 ha="center", va="center", fontsize=12, color="#999")
         _style_ax(ax, title)
         return
@@ -549,15 +555,15 @@ def _chart_share_lag(ax, deltas, title):
 
 # ── Report generator ───────────────────────────────────────────
 
-_CHART_REGISTRY: list[tuple[str, callable, int]] = [
-    ("01_播放与互动", _chart_trend, 0),
-    ("02_互动增量", _chart_interaction_pulse, 0),
-    ("03_互动转化效率", _chart_hds, 0),
-    ("04_三连率", _chart_conversion, 0),
-    ("05_观看留存率", _chart_vdr_from_rows, 0),
-    ("06_平均观看时长", _chart_avg_stay, 0),
-    ("07_传播效率", _chart_scatter, 15),
-    ("08_分享传播影响", _chart_share_lag, 20),
+_CHART_REGISTRY: list[tuple[str, callable, int, str]] = [
+    ("01_播放与互动", _chart_trend, 0, "播放量(左) + 点赞·投币(右)"),
+    ("02_互动增量", _chart_interaction_pulse, 0, "每小时各互动指标的增量变化"),
+    ("03_互动转化效率", _chart_hds, 0, "Σ(权重×互动)÷播放，越高互动转化越好"),
+    ("04_三连率", _chart_conversion, 0, "点赞/投币/收藏 ÷ 播放，反映互动意愿"),
+    ("05_观看留存率", _chart_vdr_from_rows, 0, "实际播放 ÷ 在线期望，>1 表示超预期"),
+    ("06_平均观看时长", _chart_avg_stay, 0, "单次观看秒数，红线 = 视频全长"),
+    ("07_传播效率", _chart_scatter, 15, "需 ≥5 条在线数据支持，采集中"),
+    ("08_分享传播影响", _chart_share_lag, 20, "转发前置对播放的影响，标注最佳时滞"),
 ]
 
 
@@ -579,13 +585,14 @@ async def generate_report(
     weights = weights or DEFAULT_WEIGHTS.copy()
     timestamps = _ts(rows)
     deltas = _deltas(rows)
+    hourly = _aggregate_hourly(deltas)
 
     base_dir = output or _report_dir(cfg, bvid, name, rows)
 
     name_label = name or bvid
     generated: list[Path] = []
 
-    usable = [(cn, fn, mr) for cn, fn, mr in _CHART_REGISTRY
+    usable = [(cn, fn, mr, ex) for cn, fn, mr, ex in _CHART_REGISTRY
               if len(deltas) >= mr]
     if not usable:
         return generated
@@ -596,18 +603,20 @@ async def generate_report(
             total=len(usable),
         )
 
-        for chart_name, func, min_records in usable:
+        for chart_name, func, min_records, explanation in usable:
             progress.update(task, description=f"正在生成 {chart_name}...")
 
             fig, ax = plt.subplots(figsize=_FIGSIZE)
             ts_range = f"{timestamps[0].strftime('%m-%d %H:%M')} ~ {timestamps[-1].strftime('%m-%d %H:%M')}  [{len(rows)}条记录]"
-            title = f"{name_label} · {chart_name}\n{ts_range}"
+            title = f"{name_label} · {chart_name}\n{ts_range} · {explanation}"
 
             try:
                 if chart_name in ("05_观看留存率", "06_平均观看时长"):
                     func(ax, rows, deltas, duration, title)
                 elif chart_name == "03_互动转化效率":
-                    func(ax, deltas, weights, title)
+                    func(ax, hourly, weights, title)
+                elif chart_name in ("02_互动增量", "04_三连率"):
+                    func(ax, hourly, title)
                 elif chart_name == "07_传播效率":
                     func(ax, rows, deltas, duration, title)
                 elif chart_name in ("01_播放与互动",):
@@ -616,7 +625,6 @@ async def generate_report(
                     func(ax, deltas, title)
 
                 _footer(fig)
-                fig.autofmt_xdate()
                 fig.tight_layout()
                 out_path = base_dir / f"{chart_name}.png"
                 fig.savefig(out_path, dpi=200, bbox_inches="tight")
