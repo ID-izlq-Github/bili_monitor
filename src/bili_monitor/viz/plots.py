@@ -295,16 +295,13 @@ def _chart_hds(ax, hourly, weights, title):
 # ── Chart 4: 三连率 ───────────────────────────────────────────
 
 def _chart_conversion(ax, hourly, title):
-    metrics = ["Δlikes", "Δcoins", "Δfavorites"]
-    labels = [_CN[m.lstrip("Δ")] + "/播放" for m in metrics]
-    colors = [_COLORS[m.lstrip("Δ")] for m in metrics]
-
     ts, groups = [], []
     for h in hourly:
         dv = h["Δviews"]
         if dv <= 0:
             continue
-        vals = [max(h[m], 0) / max(dv, 1) for m in metrics]
+        vals = [max(h["Δlikes"], 0) / dv, max(h["Δcoins"], 0) / dv,
+                max(h["Δfavorites"], 0) / dv]
         groups.append(vals)
         ts.append(h["timestamp"])
 
@@ -313,16 +310,36 @@ def _chart_conversion(ax, hourly, title):
         _style_ax(ax, title)
         return
 
-    for i in range(len(metrics)):
-        line_vals = [g[i] for g in groups]
-        ax.plot(ts, line_vals, color=colors[i], linewidth=1.8,
-                marker="o", markersize=3, alpha=0.8, label=labels[i])
+    # Left axis: 点赞率, 收藏率
+    left_metrics = [(0, "likes", "点赞率"), (2, "favorites", "收藏率")]
+    for idx, key, label in left_metrics:
+        line_vals = [g[idx] for g in groups]
+        ax.plot(ts, line_vals, color=_COLORS[key], linewidth=1.8,
+                marker="o", markersize=3, alpha=0.8, label=label)
+        cum = np.mean(line_vals)
+        ax.axhline(y=cum, color=_COLORS[key], linewidth=1.2,
+                   linestyle="--", alpha=0.5, label=f"{label} 均值 {cum:.3f}")
 
-    ax.set_ylabel("比值", fontsize=10)
-    ax.legend(loc="upper left", framealpha=0.9, fontsize=9)
-    _style_ax(ax, title, date_axis=False)
+    ax.set_ylabel("点赞率 / 收藏率", fontsize=10)
 
-    ax.set_xlabel("")
+    # Right axis: 投币率
+    ax2 = ax.twinx()
+    coin_vals = [g[1] for g in groups]
+    ax2.plot(ts, coin_vals, color=_COLORS["coins"], linewidth=1.8,
+             marker="o", markersize=3, alpha=0.8, label="投币率")
+    cum_coin = np.mean(coin_vals)
+    ax2.axhline(y=cum_coin, color=_COLORS["coins"], linewidth=1.2,
+                linestyle="--", alpha=0.5, label=f"投币率 均值 {cum_coin:.3f}")
+    ax2.set_ylabel("投币率", fontsize=10)
+    ax2.tick_params(axis="y", colors=_COLORS["coins"])
+    ax2.yaxis.label.set_color(_COLORS["coins"])
+
+    # Combined legend
+    l1, lb1 = ax.get_legend_handles_labels()
+    l2, lb2 = ax2.get_legend_handles_labels()
+    ax.legend(l1 + l2, lb1 + lb2, loc="upper left",
+              framealpha=0.9, fontsize=8, ncol=2)
+    _style_ax(ax, title)
 
 
 # ── Chart 5: 观看留存率 ────────────────────────────────────────
