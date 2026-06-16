@@ -132,9 +132,16 @@ class Scheduler:
                 changed = False
                 if db_row.interval != task.interval:
                     task.interval = db_row.interval
+                    task.next_run = datetime.now()
                     changed = True
                 if db_row.name != task.name:
                     task.name = db_row.name
+                    changed = True
+                if db_row.title != task.title:
+                    task.title = db_row.title
+                    changed = True
+                if db_row.uploader != task.uploader:
+                    task.uploader = db_row.uploader
                     changed = True
                 if changed:
                     logger.info("[同步] %s 参数已更新", bvid)

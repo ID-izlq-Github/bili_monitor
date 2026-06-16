@@ -159,6 +159,29 @@ class Database:
         )
         await self._commit()
 
+    async def update_video_meta(
+        self, video_id: int, *,
+        title: Optional[str] = None,
+        uploader: Optional[str] = None,
+        duration: Optional[int] = None,
+        tname: Optional[str] = None,
+    ) -> None:
+        sets = []
+        params: list = []
+        for key, val in [("title", title), ("uploader", uploader),
+                          ("duration", duration), ("tname", tname)]:
+            if val is not None:
+                sets.append(f"{key} = ?")
+                params.append(val)
+        if not sets:
+            return
+        params.append(video_id)
+        await self._execute(
+            f"UPDATE videos SET {', '.join(sets)} WHERE id = ?",
+            tuple(params),
+        )
+        await self._commit()
+
     async def set_video_active(
         self, video_id: int, active: bool
     ) -> None:

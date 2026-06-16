@@ -331,13 +331,17 @@ def update(
         None, "--interval", "-i",
         min=30, help="新记录间隔（秒），大于3600时会二次确认",
     ),
+    refresh_meta: bool = typer.Option(
+        False, "--refresh-meta", help="重新抓取视频标题、UP主、时长、分区等信息",
+    ),
 ):
-    """修改任务别名或记录间隔"""
-    asyncio.run(_cmd_update(bvid_or_name, name, interval))
+    """修改任务别名、记录间隔或刷新元数据"""
+    asyncio.run(_cmd_update(bvid_or_name, name, interval, refresh_meta))
 
 
 async def _cmd_update(
-    bvid_or_name: str, name: Optional[str], interval: Optional[int]
+    bvid_or_name: str, name: Optional[str], interval: Optional[int],
+    refresh_meta: bool,
 ) -> None:
     db, api = await _init()
     try:
@@ -356,6 +360,15 @@ async def _cmd_update(
             await db.update_name(row["id"], name)
         if interval is not None:
             await db.save_interval(row["id"], interval)
+        if refresh_meta:
+            meta = await api.fetch_video_meta(row["bvid"])
+            await db.update_video_meta(
+                row["id"],
+                title=meta.title,
+                uploader=meta.uploader,
+                duration=meta.duration or None,
+                tname=meta.tname or None,
+            )
         mgr = DaemonManager()
         mgr.reload()
         parts = [f"[bold]{row['name']}[/]"]
@@ -363,6 +376,8 @@ async def _cmd_update(
             parts.append(f"别名→{name}")
         if interval is not None:
             parts.append(f"间隔→{interval}s")
+        if refresh_meta:
+            parts.append("元数据已刷新")
         console.print(f"[green]✓[/] 已更新 " + "，".join(parts))
     finally:
         await _cleanup(db, api)
