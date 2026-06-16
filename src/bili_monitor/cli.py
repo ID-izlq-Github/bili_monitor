@@ -235,19 +235,23 @@ def stop(
 async def _cmd_stop(
     bvid_or_name: Optional[str], all: bool
 ) -> None:
-    db, api = await _init()
-    try:
-        mgr = DaemonManager()
+    mgr = DaemonManager()
 
-        if all:
+    if all:
+        mgr.stop()
+        db, api = await _init()
+        try:
             tasks = await db.get_all_tasks()
             for t in tasks:
                 if t.active:
                     await db.set_video_active(t.video_id, False)
-            mgr.stop()
-            console.print("[green]✓[/] 已停用所有任务，守护进程已停止")
-            return
+        finally:
+            await _cleanup(db, api)
+        console.print("[green]✓[/] 已停用所有任务，守护进程已停止")
+        return
 
+    db, api = await _init()
+    try:
         if not bvid_or_name:
             console.print("[red]✗[/] 请指定 BV号/别名 (--all 停用所有)")
             raise typer.Exit(1)
@@ -268,6 +272,7 @@ async def _cmd_stop(
         else:
             console.print(f"[green]✓[/] 已停用 [bold]{row['name']}[/]")
     finally:
+        await _cleanup(db, api)
         await _cleanup(db, api)
 
 
@@ -492,7 +497,7 @@ def daemon(
     mgr = DaemonManager()
     pid = mgr.status()
     if pid:
-        console.print(f"[green]●[/] 守护进程运行中 (PID: {pid})[/]")
+        console.print(f"[green]●[/] 守护进程运行中 ([bold]{pid}[/])")
     else:
         console.print("[dim]○[/] 守护进程未运行")
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -54,18 +55,17 @@ class DaemonManager:
     def start(self) -> Optional[int]:
         if self.status():
             return None
-        pid = os.fork()
-        if pid > 0:
-            _write_pid(pid)
-            return pid
-        os.setsid()
-        pid2 = os.fork()
-        if pid2 > 0:
-            sys.exit(0)
-        _write_pid(os.getpid())
-        signal.signal(signal.SIGUSR1, _handle_sigusr1)
-        _run_daemon()
-        sys.exit(0)
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "bili_monitor"],
+            env={**os.environ, "BILI_DAEMON": "1"},
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        _write_pid(proc.pid)
+        logger.info("守护进程已启动 (PID: %d)", proc.pid)
+        return proc.pid
 
     def stop(self) -> bool:
         pid = self.status()
@@ -101,6 +101,8 @@ def _run_daemon() -> None:
         level=logging.INFO,
         format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
     )
+
+    signal.signal(signal.SIGUSR1, _handle_sigusr1)
 
     loop = None
     try:
