@@ -457,14 +457,20 @@ def viz(
     ),
     type: str = typer.Option(
         "trend", "--type", "-t",
-        help="图表类型: trend / ratio",
+        help="图表类型: trend / subplot / delta / ratio",
+    ),
+    all_types: bool = typer.Option(
+        False, "--all", "-a",
+        help="生成所有类型的图表",
     ),
 ):
     """生成数据可视化"""
-    asyncio.run(_cmd_viz(bvid_or_name, metrics, type))
+    asyncio.run(_cmd_viz(bvid_or_name, metrics, type, all_types))
 
 
-async def _cmd_viz(bvid_or_name: str, metrics: str, type: str) -> None:
+async def _cmd_viz(
+    bvid_or_name: str, metrics: str, plot_type: str, generate_all: bool
+) -> None:
     db, api = await _init()
     try:
         row = await db.find_video(bvid_or_name)
@@ -472,11 +478,17 @@ async def _cmd_viz(bvid_or_name: str, metrics: str, type: str) -> None:
             console.print(f"[red]✗[/] 未找到 [bold]{bvid_or_name}[/]")
             raise typer.Exit(1)
         metric_list = [m.strip() for m in metrics.split(",")]
-        from bili_monitor.viz.plots import generate_plot
-        path = await generate_plot(
-            row["bvid"], row["id"], db, metric_list, type
-        )
-        console.print(f"[green]✓[/] 可视化已生成 → [bold]{path}[/]")
+        from bili_monitor.viz.plots import generate_plot, _PLOT_TYPES
+
+        types = _PLOT_TYPES if generate_all else [plot_type]
+        paths = []
+        for pt in types:
+            path = await generate_plot(
+                row["bvid"], row["id"], db, metric_list, pt,
+                name=row["name"],
+            )
+            paths.append(path)
+            console.print(f"[green]✓[/] [bold]{pt}[/] → [bold]{path}[/]")
     finally:
         await _cleanup(db, api)
 
