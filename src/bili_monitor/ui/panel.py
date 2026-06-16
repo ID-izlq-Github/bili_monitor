@@ -133,7 +133,7 @@ def run_panel(state: MonitorState, cmd_queue: CommandQueue) -> None:
 
     try:
         with Live(
-            refresh_per_second=0,
+            auto_refresh=False,
             vertical_overflow="visible",
             screen=False,
         ) as live:
