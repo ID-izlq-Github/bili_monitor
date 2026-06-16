@@ -554,7 +554,7 @@ async def _cmd_viz(
             name=row["name"],
             output=output,
             weights=w,
-            duration=row.get("duration"),
+            duration=row["duration"],
         )
 
         if not paths:
