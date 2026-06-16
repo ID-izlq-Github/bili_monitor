@@ -68,6 +68,8 @@ def _parse_records_from_csv(
                     online=_int_or(row.get("online")),
                     shares=_int_or(row.get("shares")),
                     rank=_int_or(row.get("rank")),
+                    reply=_int_or(row.get("reply")),
+                    his_rank=_int_or(row.get("his_rank")),
                 )
                 records.append((ts, data))
             except (ValueError, TypeError):
@@ -106,6 +108,8 @@ def _parse_records_from_json(
                 online=_int_or(item.get("online")),
                 shares=_int_or(item.get("shares")),
                 rank=_int_or(item.get("rank")),
+                reply=_int_or(item.get("reply")),
+                his_rank=_int_or(item.get("his_rank")),
             )
             records.append((ts, data))
         except (ValueError, TypeError):

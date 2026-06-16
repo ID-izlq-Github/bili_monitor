@@ -29,7 +29,7 @@ async def export_records(
     rows = await db.get_records(video_id)
     field_names = [
         "bvid", "timestamp", "views", "likes", "coins", "favorites",
-        "danmaku", "online", "shares", "rank",
+        "danmaku", "online", "shares", "rank", "reply", "his_rank",
     ]
 
     if fmt == "csv":
