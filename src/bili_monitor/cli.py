@@ -185,7 +185,9 @@ async def _cmd_snap(
             console.print(
                 f"[green]✓[/] [bold]{bvid}[/]  "
                 f"{_snap_fmt(data.views)}播放 / {_snap_fmt(data.likes)}赞 / "
-                f"{_snap_fmt(data.coins)}币 / {_snap_fmt(data.favorites)}收藏"
+                f"{_snap_fmt(data.coins)}币 / {_snap_fmt(data.favorites)}收藏 / "
+                f"{_snap_fmt(data.reply)}评论"
+                + (f" / 最高排名{data.his_rank}" if data.his_rank else "")
             )
     finally:
         await _cleanup(db, api)
