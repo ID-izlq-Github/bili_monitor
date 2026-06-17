@@ -28,7 +28,7 @@
 | **数据导出** | CSV / JSON 一键导出（含 bvid 列，便于导入） |
 | **数据导入** | CSV / JSON 一键导入，自动去重，支持覆盖和预览 |
 | **发布基线** | 自动记录视频发布时间，7 天内新视频插入全 0 基线记录 |
-| **可视化** | `viz` 一键生成 7 张分析图：核心趋势、互动增量、转化效率、三连率、观看留存(VDR)、平均停留、累计总量；支持自定义权重 |
+| **可视化** | `viz` 一键生成 7 张分析图：核心趋势、互动增量、转化效率、三连率、观看留存(VDR)、平均停留、累计总量；支持自定义权重（可选依赖，需额外安装） |
 | **守护进程** | Linux 后台运行，PID 文件管理 + SIGUSR1 实时通知 |
 | **自动停启** | `create` 自动激活并启动 daemon；停用最后任务自动关 daemon |
 | **自动提醒** | 数据超 180 天或 DB 超 30MB 时提示清理 |
@@ -48,8 +48,11 @@ cd bili-monitor
 conda create -n bili_data python=3.13
 conda activate bili_data
 
-# 3. 安装依赖
+# 3. 安装核心依赖（不含可视化）
 pip install -e .
+
+# 3b. （可选）安装可视化支持
+pip install -e .[viz]
 ```
 
 ### 使用
@@ -293,7 +296,7 @@ export BILI_DATA_DIR=/path/to/data
 | 终端 UI | [rich](https://github.com/Textualize/rich) | 表格渲染 |
 | API 封装 | [bilibili-api-python](https://github.com/Passkou/bilibili-api-python) | Bilibili 数据接口 |
 | 数据库 | SQLite3 (stdlib) | 零依赖嵌入式存储 |
-| 可视化 | [matplotlib](https://github.com/matplotlib/matplotlib) | 7 张分析图表 |
+| 可视化 | [matplotlib](https://github.com/matplotlib/matplotlib)（可选） | 7 张分析图表 |
 | 日志 | logging (stdlib) | 标准日志模块 |
 | 任务调度 | 自研 async tick loop | 轻量可控，无外部依赖 |
 
@@ -347,7 +350,7 @@ bili_monitor/
 - [typer](https://github.com/fastapi/typer) — 优雅的 CLI 框架
 - [rich](https://github.com/Textualize/rich) — 强大的终端渲染库
 - [bilibili-api-python](https://github.com/Passkou/bilibili-api-python) — Bilibili API Python 封装
-- [matplotlib](https://github.com/matplotlib/matplotlib) — 经典可视化库
+- [matplotlib](https://github.com/matplotlib/matplotlib) — 经典可视化库（可选）
 
 ---
 

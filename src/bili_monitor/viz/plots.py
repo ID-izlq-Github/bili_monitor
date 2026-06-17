@@ -7,18 +7,20 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-from matplotlib.font_manager import FontProperties
-import numpy as np
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    from matplotlib.font_manager import FontProperties
+    import numpy as np
+    _HAS_VIZ_DEPS = True
+except ImportError:
+    _HAS_VIZ_DEPS = False
 
 from rich.progress import Progress
 
 from bili_monitor.config import Settings
-from bili_monitor.db.database import Database
 
 logger = logging.getLogger("bili_monitor.viz")
 
@@ -50,20 +52,21 @@ _CN: dict[str, str] = {
     "likes+coins+favorites": "三连",
 }
 
-_FONT = FontProperties(
-    family=[
-        "HarmonyOS Sans SC",
-        "Noto Sans CJK SC",
-        "WenQuanYi Micro Hei",
-        "DejaVu Sans",
-    ]
-)
-plt.rcParams["font.family"] = _FONT.get_name()
-plt.rcParams["axes.unicode_minus"] = False
-plt.rcParams["axes.edgecolor"] = "#cccccc"
-plt.rcParams["axes.grid"] = True
-plt.rcParams["grid.alpha"] = 0.3
-plt.rcParams["grid.linestyle"] = "--"
+if _HAS_VIZ_DEPS:
+    _FONT = FontProperties(
+        family=[
+            "HarmonyOS Sans SC",
+            "Noto Sans CJK SC",
+            "WenQuanYi Micro Hei",
+            "DejaVu Sans",
+        ]
+    )
+    plt.rcParams["font.family"] = _FONT.get_name()
+    plt.rcParams["axes.unicode_minus"] = False
+    plt.rcParams["axes.edgecolor"] = "#cccccc"
+    plt.rcParams["axes.grid"] = True
+    plt.rcParams["grid.alpha"] = 0.3
+    plt.rcParams["grid.linestyle"] = "--"
 
 # ── Weights ────────────────────────────────────────────────────
 
@@ -842,20 +845,21 @@ _CHART_REGISTRY: list[tuple[str, callable, int, str]] = [  # type: ignore
 
 async def generate_report(
     bvid: str,
-    video_id: int,
-    db: Database,
+    rows: list,
     name: str = "",
     output: Optional[Path] = None,
     weights: Optional[dict] = None,
     duration: Optional[int] = None,
     videos: int = 1,
 ) -> list[Path]:
+    if not _HAS_VIZ_DEPS:
+        raise ImportError(
+            "可视化依赖未安装，请执行: pip install bili-monitor[viz]"
+        )
+
     cfg = Settings.get_instance()
-    rows = await db.get_records(video_id)
     if not rows:
         raise ValueError(f"[{bvid}] 没有记录数据")
-
-    rows = rows[::-1]
     weights = weights or DEFAULT_WEIGHTS.copy()
     timestamps = _ts(rows)
     deltas = _deltas(rows)

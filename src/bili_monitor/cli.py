@@ -550,17 +550,27 @@ async def _cmd_viz(
             console.print(f"[red]✗[/] 未找到 [bold]{bvid_or_name}[/]")
             raise typer.Exit(1)
 
+        records = await db.get_records(row["id"])
+        if not records:
+            console.print("[yellow]⚠[/] 没有数据，无法生成图表")
+            return
+        records = records[::-1]
+
         from bili_monitor.viz.plots import generate_report, load_weights
 
         w = load_weights(weights)
-        paths = await generate_report(
-            row["bvid"], row["id"], db,
-            name=row["name"],
-            output=output,
-            weights=w,
-            duration=row["duration"],
-            videos=row["videos"],
-        )
+        try:
+            paths = await generate_report(
+                row["bvid"], records,
+                name=row["name"],
+                output=output,
+                weights=w,
+                duration=row["duration"],
+                videos=row["videos"],
+            )
+        except ImportError as e:
+            console.print(f"[red]✗[/] {e}")
+            raise typer.Exit(1)
 
         if not paths:
             console.print("[yellow]⚠[/] 没有生成任何图表（数据不足）")

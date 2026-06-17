@@ -1,4 +1,6 @@
 typer>=0.9
 rich>=13
-matplotlib>=3.8
 bilibili-api-python>=17
+
+# 可视化（可选）: pip install bili-monitor[viz] 或 pip install matplotlib>=3.8
+# matplotlib>=3.8
