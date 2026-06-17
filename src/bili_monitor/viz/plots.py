@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
@@ -50,8 +51,12 @@ _CN: dict[str, str] = {
 }
 
 _FONT = FontProperties(
-    family=["HarmonyOS Sans SC", "Noto Sans CJK SC",
-            "WenQuanYi Micro Hei", "DejaVu Sans"]
+    family=[
+        "HarmonyOS Sans SC",
+        "Noto Sans CJK SC",
+        "WenQuanYi Micro Hei",
+        "DejaVu Sans",
+    ]
 )
 plt.rcParams["font.family"] = _FONT.get_name()
 plt.rcParams["axes.unicode_minus"] = False
@@ -132,10 +137,13 @@ def _style_ax(ax, title: str, xlabel: str = "时间", date_axis: bool = True) ->
 
 def _footer(fig) -> None:
     fig.text(
-        0.99, 0.005,
+        0.99,
+        0.005,
         f"BiliMonitor · {datetime.now():%Y-%m-%d %H:%M}",
-        ha="right", va="bottom",
-        fontsize=7, color="#aaaaaa",
+        ha="right",
+        va="bottom",
+        fontsize=7,
+        color="#aaaaaa",
     )
 
 
@@ -145,6 +153,7 @@ def _ts(rows) -> list[datetime]:
 
 # ── Delta computation ─────────────────────────────────────────
 
+
 def _deltas(rows):
     n = len(rows)
     deltas = []
@@ -153,8 +162,16 @@ def _deltas(rows):
         t1 = datetime.fromisoformat(rows[i]["timestamp"])
         dt = max((t1 - t0).total_seconds(), 1)
         d = {"i": i, "timestamp": t1, "dt": dt}
-        for field in ["views", "likes", "coins", "favorites",
-                       "danmaku", "shares", "reply", "online"]:
+        for field in [
+            "views",
+            "likes",
+            "coins",
+            "favorites",
+            "danmaku",
+            "shares",
+            "reply",
+            "online",
+        ]:
             v0 = rows[i - 1][field] or 0
             v1 = rows[i][field] or 0
             d[f"Δ{field}"] = v1 - v0
@@ -167,8 +184,9 @@ def _sparse_xticks(ax, labels, max_labels=10):
     step = max(1, (n + max_labels - 1) // max_labels)
     indices = list(range(0, n, step))
     ax.set_xticks(indices)
-    ax.set_xticklabels([labels[i] for i in indices],
-                       rotation=30, ha="right", fontsize=7)
+    ax.set_xticklabels(
+        [labels[i] for i in indices], rotation=30, ha="right", fontsize=7
+    )
 
 
 def _aggregate_binned(deltas, minutes=60):
@@ -187,7 +205,9 @@ def _aggregate_binned(deltas, minutes=60):
             buckets[key] = b
         for k in buckets[key]:
             if k.startswith("Δ"):
-                buckets[key][k] += d.get(k, 0) if isinstance(d.get(k), (int, float)) else 0
+                buckets[key][k] += (
+                    d.get(k, 0) if isinstance(d.get(k), (int, float)) else 0
+                )
     return sorted(buckets.values(), key=lambda x: x["timestamp"])
 
 
@@ -200,18 +220,25 @@ def _smooth(values, window=3):
     smoothed = np.convolve(arr, w, mode="same")
     half = window // 2
     for i in range(half):
-        smoothed[i] = np.mean(arr[:i + half + 1])
-        smoothed[-(i + 1)] = np.mean(arr[-(i + half + 1):])
+        smoothed[i] = np.mean(arr[: i + half + 1])
+        smoothed[-(i + 1)] = np.mean(arr[-(i + half + 1) :])
     return smoothed
 
 
 # ── Chart 1: 播放与互动 ───────────────────────────────────────
 
+
 def _chart_trend(ax, rows, timestamps, title):
     view_vals = [r["views"] or 0 for r in rows]
     ax.fill_between(timestamps, view_vals, alpha=0.08, color=_COLORS["views"])
-    ax.plot(timestamps, view_vals, color=_COLORS["views"],
-            linewidth=2, label=_CN["views"], zorder=3)
+    ax.plot(
+        timestamps,
+        view_vals,
+        color=_COLORS["views"],
+        linewidth=2,
+        label=_CN["views"],
+        zorder=3,
+    )
     ax.set_ylabel(_CN["views"], fontsize=10)
     ax.yaxis.label.set_color(_COLORS["views"])
     ax.tick_params(axis="y", colors=_COLORS["views"])
@@ -219,21 +246,28 @@ def _chart_trend(ax, rows, timestamps, title):
     ax2 = ax.twinx()
     for metric, key in [("likes", "likes"), ("coins", "coins")]:
         vals = [r[metric] or 0 for r in rows]
-        ax2.plot(timestamps, vals, color=_COLORS[key],
-                 linewidth=1.5, marker="o", markersize=2.5,
-                 alpha=0.85, label=_CN[key])
+        ax2.plot(
+            timestamps,
+            vals,
+            color=_COLORS[key],
+            linewidth=1.5,
+            marker="o",
+            markersize=2.5,
+            alpha=0.85,
+            label=_CN[key],
+        )
     ax2.relim()
     ax2.autoscale()
     ax2.set_ylabel("点赞 · 投币", fontsize=10)
 
     l1, lb1 = ax.get_legend_handles_labels()
     l2, lb2 = ax2.get_legend_handles_labels()
-    ax.legend(l1 + l2, lb1 + lb2, loc="upper left",
-               framealpha=0.9, fontsize=9)
+    ax.legend(l1 + l2, lb1 + lb2, loc="upper left", framealpha=0.9, fontsize=9)
     _style_ax(ax, title)
 
 
 # ── Chart 2: 互动增量 ─────────────────────────────────────────
+
 
 def _chart_interaction_pulse(ax, hourly, title):
     metrics = ["Δlikes", "Δcoins", "Δfavorites", "Δdanmaku", "Δreply"]
@@ -244,8 +278,7 @@ def _chart_interaction_pulse(ax, hourly, title):
     for i, m in enumerate(metrics):
         raw = [h[m] for h in hourly]
         vals = _smooth(raw, 2)
-        ax.plot(ts, vals, color=colors[i], linewidth=1.8,
-                alpha=0.8, label=labels[i])
+        ax.plot(ts, vals, color=colors[i], linewidth=1.8, alpha=0.8, label=labels[i])
 
     ax.set_ylabel("每15分钟增量", fontsize=10)
     ax.legend(loc="upper left", framealpha=0.9, fontsize=8)
@@ -254,6 +287,7 @@ def _chart_interaction_pulse(ax, hourly, title):
 
 
 # ── Chart 3: 互动转化效率 HDS ─────────────────────────────────
+
 
 def _chart_hds(ax, hourly, weights, title):
     hds_raw = []
@@ -271,26 +305,52 @@ def _chart_hds(ax, hourly, weights, title):
         ts.append(h["timestamp"])
 
     if not hds_raw:
-        ax.text(0.5, 0.5, "数据不足", ha="center", va="center", fontsize=14, color="#999")
+        ax.text(
+            0.5, 0.5, "数据不足", ha="center", va="center", fontsize=14, color="#999"
+        )
         _style_ax(ax, title)
         return
 
     hds_vals = _smooth(hds_raw, 2)
 
-    ax.plot(ts, hds_vals, color="#E45756", linewidth=1.8,
-            marker="o", markersize=4, alpha=0.8, label="HDS", zorder=3)
+    ax.plot(
+        ts,
+        hds_vals,
+        color="#E45756",
+        linewidth=1.8,
+        marker="o",
+        markersize=4,
+        alpha=0.8,
+        label="HDS",
+        zorder=3,
+    )
 
     # Moving average
     window = max(3, min(7, len(hds_vals) // 3))
     ma = np.convolve(hds_vals, np.ones(window) / window, mode="valid")
-    ma_ts = ts[window - 1:]
-    ax.plot(ma_ts, ma, color="#4C78A8", linewidth=2.2,
-            alpha=0.7, label=f"{window}期移动平均", zorder=4)
+    ma_ts = ts[window - 1 :]
+    ax.plot(
+        ma_ts,
+        ma,
+        color="#4C78A8",
+        linewidth=2.2,
+        alpha=0.7,
+        label=f"{window}期移动平均",
+        zorder=4,
+    )
 
     # Cumulative mean
     cum_mean = np.cumsum(hds_vals) / np.arange(1, len(hds_vals) + 1)
-    ax.plot(ts, cum_mean, color="#999999", linewidth=1.2,
-            linestyle="--", alpha=0.6, label="累计均值", zorder=2)
+    ax.plot(
+        ts,
+        cum_mean,
+        color="#999999",
+        linewidth=1.2,
+        linestyle="--",
+        alpha=0.6,
+        label="累计均值",
+        zorder=2,
+    )
 
     # Anomaly markers
     arr = np.array(hds_vals)
@@ -299,10 +359,17 @@ def _chart_hds(ax, hourly, weights, title):
     upper, lower = q3 + 1.5 * iqr, q1 - 1.5 * iqr
     anomalies = [i for i, v in enumerate(hds_vals) if v > upper or v < lower]
     if anomalies:
-        ax.scatter([ts[i] for i in anomalies],
-                   [hds_vals[i] for i in anomalies],
-                   color="#E45756", s=60, marker="*",
-                   zorder=5, label="异常点", edgecolors="white", linewidths=0.5)
+        ax.scatter(
+            [ts[i] for i in anomalies],
+            [hds_vals[i] for i in anomalies],
+            color="#E45756",
+            s=60,
+            marker="*",
+            zorder=5,
+            label="异常点",
+            edgecolors="white",
+            linewidths=0.5,
+        )
 
     ax.axhline(y=0, color="#cccccc", linewidth=0.8, linestyle="--")
     ax.set_ylabel("HDS 互动深度", fontsize=10)
@@ -311,6 +378,7 @@ def _chart_hds(ax, hourly, weights, title):
 
 
 # ── Chart 4: 三连率 ───────────────────────────────────────────
+
 
 def _chart_conversion(ax, binned, rows, timestamps, title):
     ts, like_rate, coin_rate, fav_rate, coin_like = [], [], [], [], []
@@ -328,42 +396,96 @@ def _chart_conversion(ax, binned, rows, timestamps, title):
         ts.append(b["timestamp"])
 
     if not ts:
-        ax.text(0.5, 0.5, "数据不足", ha="center", va="center", fontsize=14, color="#999")
+        ax.text(
+            0.5, 0.5, "数据不足", ha="center", va="center", fontsize=14, color="#999"
+        )
         _style_ax(ax, title)
         return
 
     cum_views = [r["views"] or 1 for r in rows]
     cum_likes = [r["likes"] or 0 for r in rows]
     cum_coins = [r["coins"] or 0 for r in rows]
-    cum_favs  = [r["favorites"] or 0 for r in rows]
+    cum_favs = [r["favorites"] or 0 for r in rows]
 
     cum_like_curve = [l / max(v, 1) for l, v in zip(cum_likes, cum_views)]
     cum_coin_curve = [c / max(v, 1) for c, v in zip(cum_coins, cum_views)]
-    cum_fav_curve  = [f / max(v, 1) for f, v in zip(cum_favs, cum_views)]
-    cum_cl_curve   = [c / max(l, 1) for c, l in zip(cum_coins, cum_likes)]
+    cum_fav_curve = [f / max(v, 1) for f, v in zip(cum_favs, cum_views)]
+    cum_cl_curve = [c / max(l, 1) for c, l in zip(cum_coins, cum_likes)]
 
-    ax.plot(ts, like_rate, color=_COLORS["likes"], linewidth=1.8,
-            alpha=0.85, label="点赞率 (10min)")
-    ax.plot(timestamps, cum_like_curve, color=_COLORS["likes"], linewidth=1.2,
-            linestyle="--", alpha=0.5, label="点赞率 累计")
+    ax.plot(
+        ts,
+        like_rate,
+        color=_COLORS["likes"],
+        linewidth=1.8,
+        alpha=0.85,
+        label="点赞率 (10min)",
+    )
+    ax.plot(
+        timestamps,
+        cum_like_curve,
+        color=_COLORS["likes"],
+        linewidth=1.2,
+        linestyle="--",
+        alpha=0.5,
+        label="点赞率 累计",
+    )
 
-    ax.plot(ts, coin_rate, color=_COLORS["coins"], linewidth=1.8,
-            alpha=0.85, label="投币率 (10min)")
-    ax.plot(timestamps, cum_coin_curve, color=_COLORS["coins"], linewidth=1.2,
-            linestyle="--", alpha=0.5, label="投币率 累计")
+    ax.plot(
+        ts,
+        coin_rate,
+        color=_COLORS["coins"],
+        linewidth=1.8,
+        alpha=0.85,
+        label="投币率 (10min)",
+    )
+    ax.plot(
+        timestamps,
+        cum_coin_curve,
+        color=_COLORS["coins"],
+        linewidth=1.2,
+        linestyle="--",
+        alpha=0.5,
+        label="投币率 累计",
+    )
 
-    ax.plot(ts, fav_rate, color=_COLORS["favorites"], linewidth=1.8,
-            alpha=0.85, label="收藏率 (10min)")
-    ax.plot(timestamps, cum_fav_curve, color=_COLORS["favorites"], linewidth=1.2,
-            linestyle="--", alpha=0.5, label="收藏率 累计")
+    ax.plot(
+        ts,
+        fav_rate,
+        color=_COLORS["favorites"],
+        linewidth=1.8,
+        alpha=0.85,
+        label="收藏率 (10min)",
+    )
+    ax.plot(
+        timestamps,
+        cum_fav_curve,
+        color=_COLORS["favorites"],
+        linewidth=1.2,
+        linestyle="--",
+        alpha=0.5,
+        label="收藏率 累计",
+    )
 
     ax.set_ylabel("播放比值", fontsize=10)
 
     ax2 = ax.twinx()
-    ax2.plot(ts, coin_like, color=_COLORS["danmaku"], linewidth=1.8,
-             alpha=0.85, label="投币/点赞 (10min)")
-    ax2.plot(timestamps, cum_cl_curve, color=_COLORS["danmaku"], linewidth=1.2,
-             linestyle="--", alpha=0.5, label="投币/点赞 累计")
+    ax2.plot(
+        ts,
+        coin_like,
+        color=_COLORS["danmaku"],
+        linewidth=1.8,
+        alpha=0.85,
+        label="投币/点赞 (10min)",
+    )
+    ax2.plot(
+        timestamps,
+        cum_cl_curve,
+        color=_COLORS["danmaku"],
+        linewidth=1.2,
+        linestyle="--",
+        alpha=0.5,
+        label="投币/点赞 累计",
+    )
     ax2.set_ylabel("投币/点赞", fontsize=10)
     ax2.yaxis.label.set_color(_COLORS["danmaku"])
     ax2.tick_params(axis="y", colors=_COLORS["danmaku"])
@@ -379,26 +501,45 @@ def _chart_conversion(ax, binned, rows, timestamps, title):
         (timestamps, cum_cl_curve, _COLORS["danmaku"], ax2),
     ]:
         if curve_x and curve_y:
-            axis.annotate(f"{curve_y[-1]:.3f}", xy=(curve_x[-1], curve_y[-1]),
-                          xytext=(2, 0), textcoords="offset points",
-                          fontsize=5.5, color=color, va="center", alpha=0.95,
-                          bbox=dict(boxstyle="round,pad=0.1", facecolor="white",
-                                  edgecolor=color, alpha=0.7, lw=0.5))
+            axis.annotate(
+                f"{curve_y[-1]:.3f}",
+                xy=(curve_x[-1], curve_y[-1]),
+                xytext=(2, 0),
+                textcoords="offset points",
+                fontsize=5.5,
+                color=color,
+                va="center",
+                alpha=0.95,
+                bbox=dict(
+                    boxstyle="round,pad=0.1",
+                    facecolor="white",
+                    edgecolor=color,
+                    alpha=0.7,
+                    lw=0.5,
+                ),
+            )
 
     l1, lb1 = ax.get_legend_handles_labels()
     l2, lb2 = ax2.get_legend_handles_labels()
-    ax.legend(l1 + l2, lb1 + lb2, loc="upper left",
-              framealpha=0.9, fontsize=7, ncol=2)
+    ax.legend(l1 + l2, lb1 + lb2, loc="upper left", framealpha=0.9, fontsize=7, ncol=2)
     _style_ax(ax, title)
 
 
 # ── Chart 5: 观看留存率 ────────────────────────────────────────
 # Uses raw rows for online, not deltas
 
+
 def _chart_vdr_from_rows(ax, rows, deltas, duration, title):
     if not duration:
-        ax.text(0.5, 0.5, "使用 `update xxx --refresh-meta`\n补全视频时长后即可生成",
-                ha="center", va="center", fontsize=12, color="#999")
+        ax.text(
+            0.5,
+            0.5,
+            "使用 `update xxx --refresh-meta`\n补全视频时长后即可生成",
+            ha="center",
+            va="center",
+            fontsize=12,
+            color="#999",
+        )
         _style_ax(ax, title)
         return
 
@@ -431,53 +572,116 @@ def _chart_vdr_from_rows(ax, rows, deltas, duration, title):
             start_online = None
 
     if len(vdr_vals) < 3:
-        ax.text(0.5, 0.5, "数据不足 (需 ≥3 个 Δt≥视频时长的有效间隔)",
-                ha="center", va="center", fontsize=13, color="#999")
+        ax.text(
+            0.5,
+            0.5,
+            "数据不足 (需 ≥3 个 Δt≥视频时长的有效间隔)",
+            ha="center",
+            va="center",
+            fontsize=13,
+            color="#999",
+        )
         _style_ax(ax, title)
         return
 
-    ax.plot(ts, vdr_vals, color="#4C78A8", linewidth=2,
-            marker="o", markersize=3.5, alpha=0.8, label="VDR", zorder=3)
-    ax.fill_between(ts, 1, vdr_vals,
-                     where=(np.array(vdr_vals) >= 1),
-                     color="#54A24B", alpha=0.15, interpolate=True)
-    ax.fill_between(ts, vdr_vals, 1,
-                     where=(np.array(vdr_vals) < 1),
-                     color="#E45756", alpha=0.15, interpolate=True)
+    ax.plot(
+        ts,
+        vdr_vals,
+        color="#4C78A8",
+        linewidth=2,
+        marker="o",
+        markersize=3.5,
+        alpha=0.8,
+        label="VDR",
+        zorder=3,
+    )
+    ax.fill_between(
+        ts,
+        1,
+        vdr_vals,
+        where=(np.array(vdr_vals) >= 1),
+        color="#54A24B",
+        alpha=0.15,
+        interpolate=True,
+    )
+    ax.fill_between(
+        ts,
+        vdr_vals,
+        1,
+        where=(np.array(vdr_vals) < 1),
+        color="#E45756",
+        alpha=0.15,
+        interpolate=True,
+    )
 
-    ax.axhline(y=1, color="#333333", linewidth=1.2, linestyle="--",
-               alpha=0.7, label="基准 (VDR=1)")
+    ax.axhline(
+        y=1,
+        color="#333333",
+        linewidth=1.2,
+        linestyle="--",
+        alpha=0.7,
+        label="基准 (VDR=1)",
+    )
 
     avg_vdr = np.mean(vdr_vals)
-    ax.axhline(y=avg_vdr, color="#999999", linewidth=1,
-               linestyle=":", alpha=0.6, label=f"均值 {avg_vdr:.2f}")
+    ax.axhline(
+        y=avg_vdr,
+        color="#999999",
+        linewidth=1,
+        linestyle=":",
+        alpha=0.6,
+        label=f"均值 {avg_vdr:.2f}",
+    )
 
     ax.set_ylabel("VDR (<5)", fontsize=10)
     ax.legend(loc="upper left", framealpha=0.9, fontsize=9)
     ax.axhline(y=0, color="#cccccc", linewidth=0.8)
 
-    ax.text(0.98, 0.95, f"均值 VDR={avg_vdr:.2f}",
-            transform=ax.transAxes, ha="right", va="top",
-            fontsize=9, color="#666",
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="#f0f0f0",
-                      edgecolor="#ddd", alpha=0.8))
+    ax.text(
+        0.98,
+        0.95,
+        f"均值 VDR={avg_vdr:.2f}",
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=9,
+        color="#666",
+        bbox=dict(
+            boxstyle="round,pad=0.3", facecolor="#f0f0f0", edgecolor="#ddd", alpha=0.8
+        ),
+    )
     _style_ax(ax, title)
     ax.set_xlabel("")
 
 
 # ── Chart 6: 平均观看时长 ──────────────────────────────────────
 
+
 def _chart_avg_stay(ax, rows, deltas, duration, title):
     if not duration:
-        ax.text(0.5, 0.5, "使用 `update xxx --refresh-meta`\n补全视频时长后即可生成",
-                ha="center", va="center", fontsize=12, color="#999")
+        ax.text(
+            0.5,
+            0.5,
+            "使用 `update xxx --refresh-meta`\n补全视频时长后即可生成",
+            ha="center",
+            va="center",
+            fontsize=12,
+            color="#999",
+        )
         _style_ax(ax, title)
         return
 
     online_count = sum(1 for r in rows if r["online"] is not None)
     if online_count < 5:
-        ax.text(0.5, 0.5, f"在线人数数据不足 (当前 {online_count} 条, 需要 ≥5 条)",
-                ha="center", va="center", fontsize=12, color="#999")
+        ax.text(
+            0.5,
+            0.5,
+            f"在线人数数据不足 (当前 {online_count} 条, 需要 ≥5 条)",
+            ha="center",
+            va="center",
+            fontsize=12,
+            color="#999",
+        )
         _style_ax(ax, title)
         return
 
@@ -494,48 +698,91 @@ def _chart_avg_stay(ax, rows, deltas, duration, title):
         ts.append(d["timestamp"])
 
     if not stay_vals:
-        ax.text(0.5, 0.5, "数据不足", ha="center", va="center",
-                fontsize=13, color="#999")
+        ax.text(
+            0.5, 0.5, "数据不足", ha="center", va="center", fontsize=13, color="#999"
+        )
         _style_ax(ax, title)
         return
 
-    ax.plot(ts, stay_vals, color="#4C78A8", linewidth=2,
-            marker="o", markersize=4, alpha=0.85, label="平均停留", zorder=3)
+    ax.plot(
+        ts,
+        stay_vals,
+        color="#4C78A8",
+        linewidth=2,
+        marker="o",
+        markersize=4,
+        alpha=0.85,
+        label="平均停留",
+        zorder=3,
+    )
     ax.fill_between(ts, stay_vals, alpha=0.08, color="#4C78A8")
 
-    ax.axhline(y=duration, color="#E45756", linewidth=1.8,
-               linestyle="--", alpha=0.7, label=f"视频全长 ({duration:.0f}s)")
+    ax.axhline(
+        y=duration,
+        color="#E45756",
+        linewidth=1.8,
+        linestyle="--",
+        alpha=0.7,
+        label=f"视频全长 ({duration:.0f}s)",
+    )
 
     ax.set_ylabel("停留时长 (秒)", fontsize=10)
     ax.legend(loc="upper left", framealpha=0.9, fontsize=9)
 
     avg_stay = np.mean(stay_vals)
-    ax.text(0.98, 0.05, f"平均 {avg_stay:.0f}s / 全长 {duration:.0f}s "
-            f"({avg_stay / duration * 100:.1f}%)",
-            transform=ax.transAxes, ha="right", va="bottom",
-            fontsize=9, color="#666",
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="#f0f0f0",
-                      edgecolor="#ddd", alpha=0.8))
+    ax.text(
+        0.98,
+        0.05,
+        f"平均 {avg_stay:.0f}s / 全长 {duration:.0f}s "
+        f"({avg_stay / duration * 100:.1f}%)",
+        transform=ax.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=9,
+        color="#666",
+        bbox=dict(
+            boxstyle="round,pad=0.3", facecolor="#f0f0f0", edgecolor="#ddd", alpha=0.8
+        ),
+    )
 
     _style_ax(ax, title)
 
 
 # ── Chart 7: 累计绝对值趋势 ───────────────────────────────────
 
+
 def _chart_cumulative_totals(ax, rows, timestamps, title):
     likes = [r["likes"] or 0 for r in rows]
     coins = [r["coins"] or 0 for r in rows]
     favs = [r["favorites"] or 0 for r in rows]
 
-    ax.plot(timestamps, likes, color=_COLORS["likes"], linewidth=1.8,
-            alpha=0.85, label="点赞总量")
-    ax.plot(timestamps, coins, color=_COLORS["coins"], linewidth=1.8,
-            alpha=0.85, label="投币总量")
+    ax.plot(
+        timestamps,
+        likes,
+        color=_COLORS["likes"],
+        linewidth=1.8,
+        alpha=0.85,
+        label="点赞总量",
+    )
+    ax.plot(
+        timestamps,
+        coins,
+        color=_COLORS["coins"],
+        linewidth=1.8,
+        alpha=0.85,
+        label="投币总量",
+    )
     ax.set_ylabel("点赞 · 投币", fontsize=10)
 
     ax2 = ax.twinx()
-    ax2.plot(timestamps, favs, color=_COLORS["favorites"], linewidth=1.8,
-             alpha=0.85, label="收藏总量")
+    ax2.plot(
+        timestamps,
+        favs,
+        color=_COLORS["favorites"],
+        linewidth=1.8,
+        alpha=0.85,
+        label="收藏总量",
+    )
 
     last_likes = likes[-1] if likes else 0
     last_coins = coins[-1] if coins else 0
@@ -543,16 +790,23 @@ def _chart_cumulative_totals(ax, rows, timestamps, title):
     ax2.set_ylabel("收藏", fontsize=10)
     ax2.yaxis.label.set_color(_COLORS["favorites"])
     ax2.tick_params(axis="y", colors=_COLORS["favorites"])
-    ax2.text(0.98, 0.08, f"L={last_likes/10000:.1f}万  C={last_coins/10000:.1f}万  F={last_favs/10000:.1f}万",
-             transform=ax.transAxes, ha="right", va="bottom",
-             fontsize=9, color="#666",
-             bbox=dict(boxstyle="round,pad=0.3", facecolor="#f0f0f0",
-                       edgecolor="#ddd", alpha=0.8))
+    ax2.text(
+        0.98,
+        0.08,
+        f"L={last_likes/10000:.1f}万  C={last_coins/10000:.1f}万  F={last_favs/10000:.1f}万",
+        transform=ax.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=9,
+        color="#666",
+        bbox=dict(
+            boxstyle="round,pad=0.3", facecolor="#f0f0f0", edgecolor="#ddd", alpha=0.8
+        ),
+    )
 
     l1, lb1 = ax.get_legend_handles_labels()
     l2, lb2 = ax2.get_legend_handles_labels()
-    ax.legend(l1 + l2, lb1 + lb2, loc="upper left",
-              framealpha=0.9, fontsize=9)
+    ax.legend(l1 + l2, lb1 + lb2, loc="upper left", framealpha=0.9, fontsize=9)
     _style_ax(ax, title)
     ax.set_xlabel("")
 
@@ -561,12 +815,17 @@ def _chart_cumulative_totals(ax, rows, timestamps, title):
 
 _CHART_REGISTRY: list[tuple[str, callable, int, str]] = [
     ("01_播放与互动", _chart_trend, 0, "播放量(左) + 点赞·投币(右)"),
-    ("02_互动增量", _chart_interaction_pulse, 0, "每小时各互动指标的增量变化 (平滑)"),
-    ("03_互动转化效率", _chart_hds, 0, "Σ(权重×互动)÷播放，越高互动转化越好 (平滑)"),
+    ("02_互动增量", _chart_interaction_pulse, 0, "每小时各互动指标的增量变化"),
+    ("03_互动转化效率", _chart_hds, 0, "Σ(权重×互动)÷播放，越高互动转化越好"),
     ("04_三连率", _chart_conversion, 0, "点赞/投币/收藏÷播放(左) + 投币/点赞(右)"),
-    ("05_观看留存率", _chart_vdr_from_rows, 0, "实际播放÷在线期望，Δt≥视频时长"),
+    ("05_观看留存率", _chart_vdr_from_rows, 0, "实际播放÷在线期望"),
     ("06_平均观看时长", _chart_avg_stay, 0, "单次观看秒数，红线 = 视频全长"),
-    ("07_累计绝对值趋势", _chart_cumulative_totals, 0, "点赞/投币(左) 收藏(右) 总量增长"),
+    (
+        "07_累计绝对值趋势",
+        _chart_cumulative_totals,
+        0,
+        "点赞/投币(左) 收藏(右) 总量增长",
+    ),
 ]
 
 
@@ -599,8 +858,9 @@ async def generate_report(
     name_label = name or bvid
     generated: list[Path] = []
 
-    usable = [(cn, fn, mr, ex) for cn, fn, mr, ex in _CHART_REGISTRY
-              if len(deltas) >= mr]
+    usable = [
+        (cn, fn, mr, ex) for cn, fn, mr, ex in _CHART_REGISTRY if len(deltas) >= mr
+    ]
     if not usable:
         return generated
 
