@@ -251,8 +251,6 @@ def _chart_trend(ax, rows, timestamps, title):
             vals,
             color=_COLORS[key],
             linewidth=1.5,
-            marker="o",
-            markersize=2.5,
             alpha=0.85,
             label=_CN[key],
         )
@@ -687,13 +685,26 @@ def _chart_avg_stay(ax, rows, deltas, duration, title):
 
     stay_vals, ts = [], []
     for d in deltas:
+        # 播放量应当正增长
         if d["Δviews"] <= 0:
             continue
+
         idx = d["i"]
-        online_prev = rows[idx - 1]["online"] or 0
-        online_curr = rows[idx]["online"] or 0
+        online_prev = rows[idx - 1]["online"]
+        online_curr = rows[idx]["online"]
+
+        # 在线数据有效性检查
+        if online_prev is None or online_curr is None:
+            continue
+        if online_prev <= 0 or online_curr <= 0:
+            continue
+
+        # 时间间隔异常保护
+        if d["dt"] <= 0 or d["dt"] > 7200:  # 超过2小时的间隔不参与微观计算
+            continue
+
         integral = (online_prev + online_curr) / 2 * d["dt"]
-        stay = integral / max(d["Δviews"], 1)
+        stay = integral / d["Δviews"]  # 此时分母确保 >0
         stay_vals.append(min(stay, duration * 3))
         ts.append(d["timestamp"])
 
@@ -813,7 +824,7 @@ def _chart_cumulative_totals(ax, rows, timestamps, title):
 
 # ── Report generator ───────────────────────────────────────────
 
-_CHART_REGISTRY: list[tuple[str, callable, int, str]] = [
+_CHART_REGISTRY: list[tuple[str, callable, int, str]] = [  # type: ignore
     ("01_播放与互动", _chart_trend, 0, "播放量(左) + 点赞·投币(右)"),
     ("02_互动增量", _chart_interaction_pulse, 0, "每小时各互动指标的增量变化"),
     ("03_互动转化效率", _chart_hds, 0, "Σ(权重×互动)÷播放，越高互动转化越好"),
