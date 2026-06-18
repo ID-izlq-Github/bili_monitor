@@ -331,20 +331,33 @@ def _chart_trend(ax, rows, timestamps, title):
 
 
 def _chart_interaction_pulse(ax, hourly, title):
-    metrics = ["Δlikes", "Δcoins", "Δfavorites", "Δdanmaku", "Δreply"]
-    labels = [_CN[m.lstrip("Δ")] for m in metrics]
-    colors = [_COLORS[m.lstrip("Δ")] for m in metrics]
+    left_metrics = ["Δlikes", "Δcoins"]
+    right_metrics = ["Δfavorites", "Δdanmaku", "Δreply"]
     ts = [h["timestamp"] for h in hourly]
     segs = _gap_segments(ts)
 
-    for i, m in enumerate(metrics):
+    for m in left_metrics:
         raw = [h.get(m, 0) or 0 for h in hourly]
         vals = _smooth(raw, 2)
+        key = m.lstrip("Δ")
         for s, e in segs:
-            ax.plot(ts[s:e], vals[s:e], color=colors[i], linewidth=1.8, alpha=0.8, label=labels[i] if s == 0 else "")
+            ax.plot(ts[s:e], vals[s:e], color=_COLORS[key], linewidth=1.8, alpha=0.8, label=_CN[key] if s == 0 else "")
 
     ax.set_ylabel("每30分钟增量", fontsize=10)
-    ax.legend(loc="upper left", framealpha=0.9, fontsize=8)
+
+    ax2 = ax.twinx()
+    for m in right_metrics:
+        raw = [h.get(m, 0) or 0 for h in hourly]
+        vals = _smooth(raw, 2)
+        key = m.lstrip("Δ")
+        for s, e in segs:
+            ax2.plot(ts[s:e], vals[s:e], color=_COLORS[key], linewidth=1.8, alpha=0.8, label=_CN[key] if s == 0 else "")
+    ax2.set_ylabel("每30分钟增量", fontsize=10)
+    ax2.tick_params(labelsize=9)
+
+    l1, lb1 = ax.get_legend_handles_labels()
+    l2, lb2 = ax2.get_legend_handles_labels()
+    ax.legend(l1 + l2, lb1 + lb2, loc="upper left", framealpha=0.9, fontsize=8)
     _style_ax(ax, title)
     ax.set_xlabel("")
 
