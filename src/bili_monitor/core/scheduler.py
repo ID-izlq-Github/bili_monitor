@@ -146,6 +146,19 @@ class Scheduler:
                 if changed:
                     logger.info("[同步] %s 参数已更新", bvid)
 
+        for bvid, r in db_map.items():
+            if r.active and bvid not in self._tasks:
+                self._tasks[bvid] = TaskInfo(
+                    bvid=r.bvid,
+                    name=r.name,
+                    title=r.title,
+                    uploader=r.uploader,
+                    video_id=r.video_id,
+                    interval=r.interval,
+                    next_run=datetime.now(),
+                )
+                logger.info("[同步] %s 已加入调度 (外部新增)", bvid)
+
     async def run(self) -> None:
         self._running = True
         await self.load_tasks()
