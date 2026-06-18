@@ -73,17 +73,27 @@ async def _test_roundtrip_json():
         data = RecordData(views=500, likes=50, coins=25, favorites=100, danmaku=150, online=200, shares=10, rank=3, reply=12, his_rank=50)
         await db.insert_record(video_id, datetime(2026, 6, 1, 0, 0, 0), data)
 
-        from bili_monitor.export.exporter import export_records
-        await export_records(bvid, video_id, "json", db, output=json_path)
+        from bili_monitor.export.exporter import export_records, META_FIELDS
+        row = await db.find_video(bvid)
+        meta = {k: row[k] for k in META_FIELDS}
+        await export_records(bvid, video_id, "json", db, output=json_path, meta=meta)
 
         raw = json.loads(json_path.read_text(encoding="utf-8"))
-        assert len(raw) == 1
-        assert raw[0]["bvid"] == bvid
-        assert raw[0]["views"] == 500
+        assert "meta" in raw
+        assert raw["meta"]["title"] == "JSON Title"
+        assert "records" in raw
+        assert len(raw["records"]) == 1
+        assert raw["records"][0]["bvid"] == bvid
+        assert raw["records"][0]["views"] == 500
 
-        video_id2 = await db.create_video("BV2xxJSON", "json_target", "Target", "Tester")
-        result = await import_records(json_path, bvid="BV2xxJSON", db=db)
+        # Import back — change timestamp so it inserts as a new record
+        raw["records"][0]["timestamp"] = "2026-06-02T00:00:00"
+        json_path.write_text(json.dumps(raw, ensure_ascii=False))
+        result = await import_records(json_path, bvid=bvid, db=db)
         assert result.inserted == 1
+
+        records = await db.get_records(video_id)
+        assert len(records) == 2
 
         await db.close()
     finally:

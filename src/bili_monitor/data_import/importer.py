@@ -83,8 +83,10 @@ def _parse_records_from_json(
     with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
 
+    if isinstance(raw, dict):
+        raw = raw.get("records", [])
     if not isinstance(raw, list):
-        raise ValueError("JSON 文件应为数组格式")
+        raise ValueError("JSON 文件应为数组或 {meta, records} 格式")
 
     records: list[tuple[str, RecordData]] = []
     for item in raw:
