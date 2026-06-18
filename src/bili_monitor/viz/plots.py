@@ -342,8 +342,6 @@ def _chart_trend(ax, rows, timestamps, title):
 
 
 def _chart_interaction_pulse(ax, hourly, title):
-    _LEFT_STYLE = {"likes": "-", "coins": "--"}
-    _RIGHT_STYLE = {"favorites": "-", "danmaku": "--", "reply": ":"}
     left_metrics = ["Δlikes", "Δcoins"]
     right_metrics = ["Δfavorites", "Δdanmaku", "Δreply"]
     ts = [h["timestamp"] for h in hourly]
@@ -355,12 +353,9 @@ def _chart_interaction_pulse(ax, hourly, title):
         key = m.lstrip("Δ")
         for s, e in segs:
             ax.plot(
-                ts[s:e],
-                vals[s:e],
+                ts[s:e], vals[s:e],
                 color=_COLORS[key],
-                linestyle=_LEFT_STYLE[key],
-                linewidth=1.8,
-                alpha=0.8,
+                linewidth=1.8, alpha=0.8,
                 label=_CN[key] if s == 0 else "",
             )
 
@@ -373,12 +368,9 @@ def _chart_interaction_pulse(ax, hourly, title):
         key = m.lstrip("Δ")
         for s, e in segs:
             ax2.plot(
-                ts[s:e],
-                vals[s:e],
-                color=_COLORS[key],
-                linestyle=_RIGHT_STYLE[key],
-                linewidth=1.8,
-                alpha=0.8,
+                ts[s:e], vals[s:e],
+                color=_COLORS[key], linestyle="--",
+                linewidth=1.8, alpha=0.8,
                 label=_CN[key] if s == 0 else "",
             )
     ax2.set_ylabel("收藏/评论/弹幕 每30分钟增量", fontsize=10)
