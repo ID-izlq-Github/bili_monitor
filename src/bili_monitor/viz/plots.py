@@ -355,13 +355,16 @@ def _chart_interaction_pulse(ax, hourly, title):
         key = m.lstrip("Δ")
         for s, e in segs:
             ax.plot(
-                ts[s:e], vals[s:e],
-                color=_COLORS[key], linestyle=_LEFT_STYLE[key],
-                linewidth=1.8, alpha=0.8,
+                ts[s:e],
+                vals[s:e],
+                color=_COLORS[key],
+                linestyle=_LEFT_STYLE[key],
+                linewidth=1.8,
+                alpha=0.8,
                 label=_CN[key] if s == 0 else "",
             )
 
-    ax.set_ylabel("点赞、投币每30分钟增量", fontsize=10)
+    ax.set_ylabel("点赞/投币 每30分钟增量", fontsize=10)
 
     ax2 = ax.twinx()
     for m in right_metrics:
@@ -370,12 +373,15 @@ def _chart_interaction_pulse(ax, hourly, title):
         key = m.lstrip("Δ")
         for s, e in segs:
             ax2.plot(
-                ts[s:e], vals[s:e],
-                color=_COLORS[key], linestyle=_RIGHT_STYLE[key],
-                linewidth=1.8, alpha=0.8,
+                ts[s:e],
+                vals[s:e],
+                color=_COLORS[key],
+                linestyle=_RIGHT_STYLE[key],
+                linewidth=1.8,
+                alpha=0.8,
                 label=_CN[key] if s == 0 else "",
             )
-    ax2.set_ylabel("收藏、评论、弹幕每30分钟增量", fontsize=10)
+    ax2.set_ylabel("收藏/评论/弹幕 每30分钟增量", fontsize=10)
     ax2.tick_params(labelsize=9)
 
     l1, lb1 = ax.get_legend_handles_labels()
