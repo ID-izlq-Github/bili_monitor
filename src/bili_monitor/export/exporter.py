@@ -21,11 +21,6 @@ def _auto_path(bvid: str, fmt: str, base_dir: Path) -> Path:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     return base_dir / f"{bvid}_{ts}.{fmt}"
 
-
-def _extract_meta(row: dict[str, Any]) -> dict[str, Any]:
-    return {k: row[k] for k in META_FIELDS if k in row}
-
-
 async def export_records(
     bvid: str,
     video_id: int,

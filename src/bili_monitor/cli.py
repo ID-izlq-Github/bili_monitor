@@ -499,7 +499,7 @@ async def _cmd_export(
             raise typer.Exit(1)
         from bili_monitor.export.exporter import export_records
         from bili_monitor.export.exporter import META_FIELDS
-        meta = {k: row[k] for k in META_FIELDS if k in row}
+        meta = {k: row[k] for k in META_FIELDS}
         path = await export_records(
             row["bvid"], row["id"], fmt, db, output, meta=meta
         )
