@@ -14,7 +14,6 @@ from bili_monitor.api.client import BiliAPIClient
 from bili_monitor.config import Settings
 from bili_monitor.daemon.daemon import DaemonManager
 from bili_monitor.db.database import Database
-from bili_monitor.db.models import RecordData
 
 logging.basicConfig(
     level=logging.INFO,
@@ -111,17 +110,6 @@ async def _cmd_create(
         )
         await db.save_interval(video_id, interval)
 
-        zero_record_inserted = False
-        if meta.pubdate:
-            pub_dt = datetime.fromtimestamp(meta.pubdate)
-            if (datetime.now() - pub_dt).days <= 7:
-                zero_data = RecordData(
-                    views=0, likes=0, coins=0, favorites=0,
-                    danmaku=0, online=0, shares=0, rank=0,
-                )
-                await db.insert_record(video_id, pub_dt, zero_data)
-                zero_record_inserted = True
-
         if not inactive:
             await db.set_video_active(video_id, True)
             mgr = DaemonManager()
@@ -130,10 +118,7 @@ async def _cmd_create(
                 console.print("[green]✓[/] 守护进程已启动")
             else:
                 mgr.reload()
-            msg = f"[green]✓[/] 已创建并激活 [bold]{resolved_name}[/] ({bvid})"
-            if zero_record_inserted:
-                msg += " [dim](含发布时零记录)[/]"
-            console.print(msg)
+            console.print(f"[green]✓[/] 已创建并激活 [bold]{resolved_name}[/] ({bvid})")
         else:
             console.print(f"[green]✓[/] 已创建 [bold]{resolved_name}[/] ({bvid}) [dim](未激活)[/]")
     finally:
@@ -513,8 +498,10 @@ async def _cmd_export(
             console.print(f"[red]✗[/] 未找到 [bold]{bvid_or_name}[/]")
             raise typer.Exit(1)
         from bili_monitor.export.exporter import export_records
+        from bili_monitor.export.exporter import META_FIELDS
+        meta = {k: row[k] for k in META_FIELDS if k in row}
         path = await export_records(
-            row["bvid"], row["id"], fmt, db, output
+            row["bvid"], row["id"], fmt, db, output, meta=meta
         )
         console.print(f"[green]✓[/] 已导出 → [bold]{path}[/]")
     finally:
