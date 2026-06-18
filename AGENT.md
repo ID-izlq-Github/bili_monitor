@@ -260,5 +260,3 @@ $ python -m bili_monitor daemon status
 | matplotlib, numpy | 可视化（可选） | `pip install bili-monitor[viz]` |
 
 通过 `pyproject.toml` 的 `[project.optional-dependencies]` 管理可选依赖。`viz/plots.py` 使用 try/except 兜底缺失的导入，运行时抛出清晰提示。
-
-7. 测试

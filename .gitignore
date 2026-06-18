@@ -36,6 +36,3 @@ Thumbs.db
 
 # Test artifacts (but not test code)
 test/__pycache__/
-
-# Agent Files
-AGENT.md
