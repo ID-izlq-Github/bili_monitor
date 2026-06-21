@@ -16,8 +16,6 @@ class Settings:
 
     min_interval: int = 30
     default_interval: int = 900
-    max_tasks: int = 5
-
     max_db_size_mb: int = 30
     max_record_days: int = 180
     auto_cleanup: bool = False

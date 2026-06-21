@@ -9,7 +9,7 @@ Bilibili 视频数据监控 CLI 工具。多视频并发监控（序列化请求
 ```
 ┌─────────────┐  typer CLI（12 子命令, 内置 --install-completion）
 │   cli.py    │  create / delete / start / stop / update / show
-└──────┬──────┘  list / export / import / viz / daemon status
+└──────┬──────┘  export / import / viz / status
        │
        ▼
 ┌──────────────┐  SIGUSR1 实时 reload
@@ -32,7 +32,7 @@ bilibili_record/
 │   └── bili_monitor/
 │       ├── __init__.py
 │       ├── __main__.py              # python -m bili_monitor
-│   ├── cli.py                   # typer CLI 入口（12 子命令）
+│   ├── cli.py                   # typer CLI 入口（11 子命令）
 │       ├── config.py                # 全局配置、常量
 │       ├── api/
 │       │   ├── __init__.py
@@ -117,7 +117,7 @@ CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
 ## 模块职责
 
 ### `cli.py` — CLI 入口
-- typer command group，12 个子命令
+- typer command group，11 个子命令
 - `create <bvid> [--name X] [--interval N] [--inactive]`：注册新视频，自动获取发布时数据
   - 间隔 >3600s 时二次确认
 - `snap [bvid/name] [--all]`：立即记录一次数据（不经过调度器）
@@ -126,11 +126,10 @@ CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
 - `stop [bvid/name] [--all]`：停用任务 / 关 daemon
 - `update <bvid/name> [--name X] [--interval N] [--refresh-meta]`：修改别名/间隔，或刷新标题/UP主/时长/分区等元数据
 - `show <bvid/name> [--last N]`：查看最近记录（含评论、历史最高排名列）
-- `list`：列出所有任务（含发布时间、分区、时长列）
-- `export <bvid/name> [--format csv|json] [--output PATH]`：导出数据（含视频元数据：标题/UP主/别名/发布时间/时长/分区）
+- `export <bvid/name> [--format csv|json] [--output PATH] [-a/-A]`：导出数据（含视频元数据）；`-a` 所有活跃任务，`-A` 所有任务
 - `import <file> --bvid <BV> [--format] [--dry-run] [--overwrite]`：导入 CSV/JSON 数据
-- `viz <bvid/name> [--weights FILE] [--output DIR]`：生成可视化报告
-- `daemon status`：查看守护进程状态
+- `viz <bvid/name> [--weights FILE] [--output DIR] [-a/-A] [--raw] [--parallel/--no-parallel]`：生成可视化报告；`-a` 所有活跃，`-A` 所有，`--raw` 不过滤异常，`--parallel` 并行（≥3 个自动启用）
+- `status`：查看守护进程状态和监控任务列表
 
 ### `api/client.py` — Bilibili API 封装
 - 封装 `bilibili-api-python` 调用
@@ -162,7 +161,7 @@ CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
 ### `export/exporter.py` — 数据导出
 - CSV 导出：bvid + 所有记录字段 + 视频元数据列（title/uploader/name/pubdate/duration/tname）
 - JSON 导出：`{"meta": {title, uploader, name, pubdate, duration, tname}, "records": [...]}`
-- 文件名自动生成 `{bvid}_{timestamp}.csv/json`
+- 文件名自动生成 `{bvid}-{name}/{timestamp}.csv/json`
 
 ### `viz/plots.py` — 可视化（可选依赖）
 - 依赖 `matplotlib` + `numpy`，通过 `pip install bili-monitor[viz]` 安装
@@ -188,7 +187,6 @@ CREATE INDEX idx_records_video_time ON records(video_id, timestamp);
 ### `config.py` — 配置
 - 默认值：间隔 900s，数据目录 `./bili_monitor.db`，图片目录 `./output/image/`
 - 环境变量 `BILI_DATA_DIR` 覆盖数据目录
-- 常量：最小间隔 60s，最大任务数 5
 
 ## 运行模式
 
@@ -201,11 +199,14 @@ $ python -m bili_monitor show myvideo --last 5
 
 # 导入/导出
 $ python -m bili_monitor export myvideo --format csv
+$ python -m bili_monitor export -a
 $ python -m bili_monitor import data.csv --bvid BV1xx
 
 # 可视化
 $ python -m bili_monitor viz myvideo
 $ python -m bili_monitor viz myvideo --weights my_weights.json
+$ python -m bili_monitor viz -a --raw
+$ python -m bili_monitor viz -a --parallel
 
 # 立即记录
 $ python -m bili_monitor snap myvideo
@@ -215,8 +216,8 @@ $ python -m bili_monitor snap --all
 $ python -m bili_monitor start myvideo
 $ python -m bili_monitor stop myvideo
 
-# 守护进程
-$ python -m bili_monitor daemon status
+# 状态
+$ python -m bili_monitor status
 ```
 
 ## 编码规范

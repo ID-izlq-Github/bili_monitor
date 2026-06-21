@@ -126,30 +126,38 @@ class BiliAPIClient:
         )
 
     async def fetch_record_data(self, bvid: str) -> RecordData:
-        info_task = self._fetch_info(bvid)
-        online_task = self._fetch_online(bvid)
-        results = await asyncio.gather(
-            info_task, online_task, return_exceptions=True
+        for attempt in range(3):
+            info_task = self._fetch_info(bvid)
+            online_task = self._fetch_online(bvid)
+            results = await asyncio.gather(
+                info_task, online_task, return_exceptions=True
+            )
+
+            info, online = results[0], results[1]
+
+            if isinstance(info, dict):
+                data = RecordData()
+                stat = info.get("stat") or {}
+                for api_key, record_key in RECORD_FIELDS.items():
+                    val = stat.get(api_key)
+                    if val is not None:
+                        setattr(data, record_key, _safe_int(val))
+                if isinstance(online, dict):
+                    data.online = _parse_count(online.get("total"))
+                return data
+
+            if attempt < 2:
+                logger.warning(
+                    "[%s] 第 %d 次获取失败，%ds 后重试",
+                    bvid, attempt + 1, 2 ** attempt,
+                )
+                await asyncio.sleep(2 ** attempt)
+
+        logger.warning("[%s] 连续 3 次获取失败，写入 -1", bvid)
+        return RecordData(
+            views=-1, likes=-1, coins=-1, favorites=-1,
+            danmaku=-1, online=-1, shares=-1, rank=-1, reply=-1, his_rank=-1,
         )
-
-        info, online = results[0], results[1]
-        data = RecordData()
-
-        if isinstance(info, dict):
-            stat = info.get("stat") or {}
-            for api_key, record_key in RECORD_FIELDS.items():
-                val = stat.get(api_key)
-                if val is not None:
-                    setattr(data, record_key, _safe_int(val))
-        elif isinstance(info, BaseException):
-            logger.warning("[%s] 获取视频信息失败: %s", bvid, info)
-
-        if isinstance(online, dict):
-            data.online = _parse_count(online.get("total"))
-        elif isinstance(online, BaseException):
-            logger.debug("[%s] 获取在线人数失败: %s", bvid, online)
-
-        return data
 
     async def _fetch_info(self, bvid: str) -> dict:
         video = BiliVideo(bvid=bvid)

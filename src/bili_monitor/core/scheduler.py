@@ -29,8 +29,6 @@ class TaskInfo:
     video_id: int
     interval: int
     next_run: datetime
-    last_run: Optional[datetime] = None
-    error_count: int = 0
     active: bool = True
 
 
@@ -195,9 +193,7 @@ class Scheduler:
         data = await self._api.fetch_record_data(task.bvid)
         now = datetime.now()
         await self._db.insert_record(task.video_id, now, data)
-        task.last_run = now
         task.next_run = now + timedelta(seconds=task.interval)
-        task.error_count = 0
         logger.info(
             "[%s] %s ✓ %s播放 %s赞 %s币 %s收藏",
             task.bvid, task.title,

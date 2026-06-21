@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -27,6 +29,7 @@ app = typer.Typer(
     name="bili-monitor",
     help="Bilibili 视频数据监控工具",
     no_args_is_help=True,
+    add_completion=False,
     context_settings={"help_option_names": ["-h", "--help"]},
 )
 
@@ -45,16 +48,27 @@ async def _cleanup(db: Database, api: BiliAPIClient) -> None:
     await api.close()
 
 
-def _find_bvid(api: BiliAPIClient, raw: str) -> str:
-    try:
-        return BiliAPIClient.resolve_bvid(raw)
-    except ValueError:
-        return raw
-
-
 def _auto_name(raw: str) -> str:
     ts = datetime.now().strftime("%H%M%S")
     return f"bili_{ts}"
+
+
+async def _resolve_targets(
+    db: Database,
+    bvid_or_name: Optional[str],
+    all_active: bool,
+    all_tasks: bool,
+) -> list:
+    """Resolve tasks for -a/-A sweeps; raises typer.Exit if nothing found."""
+    if not all_active and not all_tasks:
+        return []
+    tasks = await db.get_all_tasks()
+    if all_active:
+        tasks = [t for t in tasks if t.active]
+    if not tasks:
+        console.print("[yellow]⚠[/] 没有匹配的任务")
+        raise typer.Exit(0)
+    return tasks
 
 
 # ── create ─────────────────────────────────────────────────────
@@ -65,20 +79,23 @@ def create(
     bvid: str = typer.Argument(..., help="BV号或视频URL"),
     name: str = typer.Option("", "--name", "-n", help="别名（不传则自动生成）"),
     interval: int = typer.Option(
-        900, "--interval", "-i",
-        min=60, help="记录间隔（秒），大于3600时会二次确认",
+        900,
+        "--interval",
+        "-i",
+        min=60,
+        help="记录间隔（秒），大于3600时会二次确认",
     ),
     inactive: bool = typer.Option(
-        False, "--inactive", help="创建后不自动激活",
+        False,
+        "--inactive",
+        help="创建后不自动激活",
     ),
 ):
     """注册新视频到系统"""
     asyncio.run(_cmd_create(bvid, name, interval, inactive))
 
 
-async def _cmd_create(
-    raw: str, name: str, interval: int, inactive: bool
-) -> None:
+async def _cmd_create(raw: str, name: str, interval: int, inactive: bool) -> None:
     db, api = await _init()
     try:
         bvid = BiliAPIClient.resolve_bvid(raw)
@@ -98,11 +115,13 @@ async def _cmd_create(
 
         meta = await api.fetch_video_meta(bvid)
         pubdate_iso = (
-            datetime.fromtimestamp(meta.pubdate).isoformat()
-            if meta.pubdate else None
+            datetime.fromtimestamp(meta.pubdate).isoformat() if meta.pubdate else None
         )
         video_id = await db.create_video(
-            bvid, resolved_name, meta.title, meta.uploader,
+            bvid,
+            resolved_name,
+            meta.title,
+            meta.uploader,
             pubdate=pubdate_iso,
             duration=meta.duration or None,
             tname=meta.tname or None,
@@ -120,7 +139,9 @@ async def _cmd_create(
                 mgr.reload()
             console.print(f"[green]✓[/] 已创建并激活 [bold]{resolved_name}[/] ({bvid})")
         else:
-            console.print(f"[green]✓[/] 已创建 [bold]{resolved_name}[/] ({bvid}) [dim](未激活)[/]")
+            console.print(
+                f"[green]✓[/] 已创建 [bold]{resolved_name}[/] ({bvid}) [dim](未激活)[/]"
+            )
     finally:
         await _cleanup(db, api)
 
@@ -131,19 +152,21 @@ async def _cmd_create(
 @app.command()
 def snap(
     bvid_or_name: Optional[str] = typer.Argument(
-        None, help="BV号或别名（不传则配合 --all）",
+        None,
+        help="BV号或别名（不传则配合 --all）",
     ),
     all_tasks: bool = typer.Option(
-        False, "--all", "-a", help="所有活跃任务各记录一次",
+        False,
+        "--all",
+        "-a",
+        help="所有活跃任务各记录一次",
     ),
 ):
     """立即记录一次数据（不等待调度器）"""
     asyncio.run(_cmd_snap(bvid_or_name, all_tasks))
 
 
-async def _cmd_snap(
-    bvid_or_name: Optional[str], all_tasks: bool
-) -> None:
+async def _cmd_snap(bvid_or_name: Optional[str], all_tasks: bool) -> None:
     if not bvid_or_name and not all_tasks:
         console.print("[red]✗[/] 请指定 BV号/别名，或使用 --all")
         raise typer.Exit(1)
@@ -219,9 +242,7 @@ def start(
     asyncio.run(_cmd_start(bvid_or_name, all))
 
 
-async def _cmd_start(
-    bvid_or_name: Optional[str], all: bool
-) -> None:
+async def _cmd_start(bvid_or_name: Optional[str], all: bool) -> None:
     db, api = await _init()
     try:
         if all:
@@ -262,18 +283,16 @@ async def _cmd_start(
 
 @app.command()
 def stop(
-    bvid_or_name: Optional[str] = typer.Argument(
-        None, help="BV号或别名（不传则报错）"
+    bvid_or_name: Optional[str] = typer.Argument(None, help="BV号或别名（不传则报错）"),
+    all: bool = typer.Option(
+        False, "--all", "-a", help="关闭守护进程（不改变任务活跃状态）"
     ),
-    all: bool = typer.Option(False, "--all", "-a", help="关闭守护进程（不改变任务活跃状态）"),
 ):
     """停用任务 / 关闭守护进程"""
     asyncio.run(_cmd_stop(bvid_or_name, all))
 
 
-async def _cmd_stop(
-    bvid_or_name: Optional[str], all: bool
-) -> None:
+async def _cmd_stop(bvid_or_name: Optional[str], all: bool) -> None:
     mgr = DaemonManager()
 
     if all:
@@ -314,11 +333,16 @@ def update(
     bvid_or_name: str = typer.Argument(..., help="BV号或别名"),
     name: Optional[str] = typer.Option(None, "--name", "-n", help="新别名"),
     interval: Optional[int] = typer.Option(
-        None, "--interval", "-i",
-        min=30, help="新记录间隔（秒），大于3600时会二次确认",
+        None,
+        "--interval",
+        "-i",
+        min=30,
+        help="新记录间隔（秒），大于3600时会二次确认",
     ),
     refresh_meta: bool = typer.Option(
-        False, "--refresh-meta", help="重新抓取视频标题、UP主、时长、分区、发布时间",
+        False,
+        "--refresh-meta",
+        help="重新抓取视频标题、UP主、时长、分区、发布时间",
     ),
 ):
     """修改任务别名、记录间隔或刷新元数据"""
@@ -326,7 +350,9 @@ def update(
 
 
 async def _cmd_update(
-    bvid_or_name: str, name: Optional[str], interval: Optional[int],
+    bvid_or_name: str,
+    name: Optional[str],
+    interval: Optional[int],
     refresh_meta: bool,
 ) -> None:
     db, api = await _init()
@@ -350,7 +376,8 @@ async def _cmd_update(
             meta = await api.fetch_video_meta(row["bvid"])
             pubdate_iso = (
                 datetime.fromtimestamp(meta.pubdate).isoformat()
-                if meta.pubdate else None
+                if meta.pubdate
+                else None
             )
             await db.update_video_meta(
                 row["id"],
@@ -382,8 +409,12 @@ async def _cmd_update(
 def show(
     bvid_or_name: str = typer.Argument(..., help="BV号或别名"),
     last: int = typer.Option(
-        10, "--last", "-l",
-        min=1, max=200, help="显示最近 N 条记录",
+        10,
+        "--last",
+        "-l",
+        min=1,
+        max=200,
+        help="显示最近 N 条记录",
     ),
 ):
     """查看视频记录数据"""
@@ -414,26 +445,308 @@ async def _cmd_show(bvid_or_name: str, last: int) -> None:
         for r in records:
             table.add_row(
                 r["timestamp"][:19],
-                _n(r["views"]), _n(r["likes"]),
-                _n(r["coins"]), _n(r["favorites"]),
-                _n(r["danmaku"]), _n(r["reply"]),
-                _n(r["online"]), _n(r["his_rank"]),
+                _n(r["views"]),
+                _n(r["likes"]),
+                _n(r["coins"]),
+                _n(r["favorites"]),
+                _n(r["danmaku"]),
+                _n(r["reply"]),
+                _n(r["online"]),
+                _n(r["his_rank"]),
             )
         console.print(table)
     finally:
         await _cleanup(db, api)
 
 
-# ── list ───────────────────────────────────────────────────────
+# ── export ─────────────────────────────────────────────────────
 
 
 @app.command()
-def list():
-    """列出所有监控任务"""
-    asyncio.run(_cmd_list())
+def export(
+    bvid_or_name: Optional[str] = typer.Argument(None, help="BV号或别名"),
+    fmt: str = typer.Option(
+        "csv",
+        "--format",
+        "-f",
+        help="导出格式 (csv/json)",
+    ),
+    all_active: bool = typer.Option(
+        False,
+        "-a",
+        "--all",
+        help="导出所有活跃任务",
+    ),
+    all_tasks: bool = typer.Option(
+        False,
+        "-A",
+        "--all-tasks",
+        help="导出所有任务（含已停止）",
+    ),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="输出路径（仅单任务模式）",
+    ),
+):
+    """导出视频记录数据"""
+    asyncio.run(_cmd_export(bvid_or_name, fmt, all_active, all_tasks, output))
 
 
-async def _cmd_list() -> None:
+async def _cmd_export(
+    bvid_or_name: Optional[str],
+    fmt: str,
+    all_active: bool,
+    all_tasks: bool,
+    output: Optional[Path],
+) -> None:
+    if not bvid_or_name and not all_active and not all_tasks:
+        console.print("[red]✗[/] 请指定 BV号/别名，或使用 -a/-A")
+        raise typer.Exit(1)
+    if bvid_or_name and (all_active or all_tasks):
+        console.print("[red]✗[/] 不能同时指定 BV号 和 -a/-A")
+        raise typer.Exit(1)
+
+    db, api = await _init()
+    try:
+        from bili_monitor.export.exporter import export_records, META_FIELDS
+
+        if all_active or all_tasks:
+            targets = await _resolve_targets(db, bvid_or_name, all_active, all_tasks)
+            for t in targets:
+                meta = {k: getattr(t, k, "") for k in META_FIELDS}
+                path = await export_records(t.bvid, t.video_id, fmt, db, meta=meta)
+                console.print(f"[green]✓[/] {t.name} → [bold]{path}[/]")
+        else:
+            row = await db.find_video(bvid_or_name)
+            if not row:
+                console.print(f"[red]✗[/] 未找到 [bold]{bvid_or_name}[/]")
+                raise typer.Exit(1)
+            meta = {k: row[k] for k in META_FIELDS}
+            path = await export_records(
+                row["bvid"], row["id"], fmt, db, output, meta=meta
+            )
+            console.print(f"[green]✓[/] 已导出 → [bold]{path}[/]")
+    finally:
+        await _cleanup(db, api)
+
+
+# ── viz ────────────────────────────────────────────────────────
+
+
+@app.command()
+def viz(
+    bvid_or_name: Optional[str] = typer.Argument(None, help="BV号或别名"),
+    all_active: bool = typer.Option(
+        False,
+        "-a",
+        "--all",
+        help="所有活跃任务",
+    ),
+    all_tasks: bool = typer.Option(
+        False,
+        "-A",
+        "--all-tasks",
+        help="所有任务（含已停止）",
+    ),
+    raw: bool = typer.Option(
+        False,
+        "--raw",
+        help="使用原始数据，不过滤异常值",
+    ),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="自定义输出目录（仅单任务模式）",
+    ),
+    parallel: Optional[bool] = typer.Option(
+        None,
+        "--parallel/--no-parallel",
+        help="并行生成（默认: ≥3个任务时自动启用）",
+    ),
+    weights: Optional[Path] = typer.Option(
+        None,
+        "--weights",
+        "-w",
+        help="权重 JSON 文件（局部覆盖默认热度权重）",
+    ),
+):
+    """生成数据可视化报告（一次性输出所有图表）"""
+    asyncio.run(
+        _cmd_viz(bvid_or_name, all_active, all_tasks, raw, output, parallel, weights)
+    )
+
+
+async def _cmd_viz(
+    bvid_or_name: Optional[str],
+    all_active: bool,
+    all_tasks: bool,
+    raw: bool,
+    output: Optional[Path],
+    parallel: Optional[bool],
+    weights: Optional[Path],
+) -> None:
+    if not bvid_or_name and not all_active and not all_tasks:
+        console.print("[red]✗[/] 请指定 BV号/别名，或使用 -a/-A")
+        raise typer.Exit(1)
+    if bvid_or_name and (all_active or all_tasks):
+        console.print("[red]✗[/] 不能同时指定 BV号 和 -a/-A")
+        raise typer.Exit(1)
+
+    if bvid_or_name and output and not output.exists():
+        output.mkdir(parents=True, exist_ok=True)
+
+    db, api = await _init()
+    try:
+        from bili_monitor.viz.plots import generate_report, _render_report, load_weights
+
+        w = load_weights(weights)
+        filter_outliers = not raw
+
+        if all_active or all_tasks:
+            targets = await _resolve_targets(db, bvid_or_name, all_active, all_tasks)
+
+            use_parallel = parallel if parallel is not None else len(targets) >= 3
+            if use_parallel:
+                console.print(f"[yellow]⚡ 任务数 {len(targets)} ≥ 3，启用并行生成[/]")
+                cpu_count = os.cpu_count() or 1
+                max_workers = min(len(targets), cpu_count)
+
+                viz_tasks = []
+                for t in targets:
+                    records = await db.get_records(t.video_id)
+                    if not records:
+                        continue
+                    records = [dict(r) for r in records[::-1]]
+                    viz_tasks.append((t, records))
+
+                if not viz_tasks:
+                    console.print("[yellow]⚠[/] 没有数据，无法生成图表")
+                    return
+
+                loop = asyncio.get_event_loop()
+                with concurrent.futures.ProcessPoolExecutor(
+                    max_workers=max_workers
+                ) as pool:
+                    aio_futs = {}
+                    for t, records in viz_tasks:
+                        c_fut = loop.run_in_executor(
+                            pool,
+                            _render_report,
+                            t.bvid,
+                            records,
+                            t.name,
+                            None,
+                            w,
+                            t.duration,
+                            t.videos,
+                            filter_outliers,
+                            False,
+                        )
+                        a_fut = asyncio.wrap_future(c_fut)
+                        aio_futs[a_fut] = t
+
+                    pending = set(aio_futs.keys())
+                    while pending:
+                        done, pending = await asyncio.wait(
+                            pending,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        for a_fut in done:
+                            t = aio_futs[a_fut]
+                            paths = a_fut.result()
+                            if paths:
+                                console.print(
+                                    f"[green]✓[/] {t.name} · {len(paths)} 张图表 "
+                                    f"→ [bold]{paths[0].parent}[/]"
+                                )
+                            else:
+                                console.print(f"[yellow]⚠[/] {t.name} 数据不足，跳过")
+            else:
+                for t in targets:
+                    records = await db.get_records(t.video_id)
+                    if not records:
+                        console.print(f"[yellow]⚠[/] {t.name} 没有数据，跳过")
+                        continue
+                    records = [dict(r) for r in records[::-1]]
+                    try:
+                        paths = await generate_report(
+                            t.bvid,
+                            records,
+                            name=t.name,
+                            output=None,
+                            weights=w,
+                            duration=t.duration,
+                            videos=t.videos,
+                            filter_outliers=filter_outliers,
+                        )
+                    except ImportError as e:
+                        console.print(f"[red]✗[/] {e}")
+                        raise typer.Exit(1)
+                    if paths:
+                        console.print(
+                            f"[green]✓[/] {t.name} · {len(paths)} 张图表 "
+                            f"→ [bold]{paths[0].parent}[/]"
+                        )
+                    else:
+                        console.print(f"[yellow]⚠[/] {t.name} 数据不足，跳过")
+        else:
+            row = await db.find_video(bvid_or_name)
+            if not row:
+                console.print(f"[red]✗[/] 未找到 [bold]{bvid_or_name}[/]")
+                raise typer.Exit(1)
+
+            records = await db.get_records(row["id"])
+            if not records:
+                console.print("[yellow]⚠[/] 没有数据，无法生成图表")
+                return
+            records = [dict(r) for r in records[::-1]]
+
+            try:
+                paths = await generate_report(
+                    row["bvid"],
+                    records,
+                    name=row["name"],
+                    output=output,
+                    weights=w,
+                    duration=row["duration"],
+                    videos=row["videos"],
+                    filter_outliers=filter_outliers,
+                )
+            except ImportError as e:
+                console.print(f"[red]✗[/] {e}")
+                raise typer.Exit(1)
+
+            if paths:
+                console.print(
+                    f"[green]✓[/] {row['name']} · {len(paths)} 张图表 "
+                    f"→ [bold]{paths[0].parent}[/]"
+                )
+            else:
+                console.print("[yellow]⚠[/] 没有生成任何图表（数据不足）")
+    finally:
+        await _cleanup(db, api)
+
+
+# ── status ─────────────────────────────────────────────────────
+
+
+@app.command()
+def status():
+    """查看守护进程状态和监控任务列表"""
+    asyncio.run(_cmd_status())
+
+
+async def _cmd_status() -> None:
+    mgr = DaemonManager()
+    pid = mgr.status()
+    if pid:
+        console.print(f"[green]●[/] 守护进程运行中 ([bold]{pid}[/])\n")
+    else:
+        console.print("[dim]○[/] 守护进程未运行\n")
+
     db, api = await _init()
     try:
         tasks = await db.get_all_tasks()
@@ -461,132 +774,22 @@ async def _cmd_list() -> None:
             tname_str = t.tname or "[dim]—[/]"
             videos_str = str(t.videos) + "P" if t.videos > 1 else "[dim]—[/]"
             table.add_row(
-                t.name, t.bvid, t.title[:40], t.uploader,
-                tname_str, duration_str, videos_str,
-                status, f"{t.interval}s",
-                str(t.record_count), last, pub[:19] if t.pubdate else "[dim]—[/]",
+                t.name,
+                t.bvid,
+                t.title[:40],
+                t.uploader,
+                tname_str,
+                duration_str,
+                videos_str,
+                status,
+                f"{t.interval}s",
+                str(t.record_count),
+                last,
+                pub[:19] if t.pubdate else "[dim]—[/]",
             )
         console.print(table)
     finally:
         await _cleanup(db, api)
-
-
-# ── export ─────────────────────────────────────────────────────
-
-
-@app.command()
-def export(
-    bvid_or_name: str = typer.Argument(..., help="BV号或别名"),
-    fmt: str = typer.Option(
-        "csv", "--format", "-f", help="导出格式 (csv/json)",
-    ),
-    output: Optional[Path] = typer.Option(
-        None, "--output", "-o", help="输出路径",
-    ),
-):
-    """导出视频记录数据"""
-    asyncio.run(_cmd_export(bvid_or_name, fmt, output))
-
-
-async def _cmd_export(
-    bvid_or_name: str, fmt: str, output: Optional[Path]
-) -> None:
-    db, api = await _init()
-    try:
-        row = await db.find_video(bvid_or_name)
-        if not row:
-            console.print(f"[red]✗[/] 未找到 [bold]{bvid_or_name}[/]")
-            raise typer.Exit(1)
-        from bili_monitor.export.exporter import export_records
-        from bili_monitor.export.exporter import META_FIELDS
-        meta = {k: row[k] for k in META_FIELDS}
-        path = await export_records(
-            row["bvid"], row["id"], fmt, db, output, meta=meta
-        )
-        console.print(f"[green]✓[/] 已导出 → [bold]{path}[/]")
-    finally:
-        await _cleanup(db, api)
-
-
-# ── viz ────────────────────────────────────────────────────────
-
-
-@app.command()
-def viz(
-    bvid_or_name: str = typer.Argument(..., help="BV号或别名"),
-    output: Optional[Path] = typer.Option(
-        None, "--output", "-o", help="自定义输出目录",
-    ),
-    weights: Optional[Path] = typer.Option(
-        None, "--weights", "-w", help="权重 JSON 文件（局部覆盖默认热度权重）",
-    ),
-):
-    """生成数据可视化报告（一次性输出所有图表）"""
-    asyncio.run(_cmd_viz(bvid_or_name, output, weights))
-
-
-async def _cmd_viz(
-    bvid_or_name: str,
-    output: Optional[Path],
-    weights: Optional[Path],
-) -> None:
-    db, api = await _init()
-    try:
-        row = await db.find_video(bvid_or_name)
-        if not row:
-            console.print(f"[red]✗[/] 未找到 [bold]{bvid_or_name}[/]")
-            raise typer.Exit(1)
-
-        records = await db.get_records(row["id"])
-        if not records:
-            console.print("[yellow]⚠[/] 没有数据，无法生成图表")
-            return
-        records = records[::-1]
-
-        from bili_monitor.viz.plots import generate_report, load_weights
-
-        w = load_weights(weights)
-        try:
-            paths = await generate_report(
-                row["bvid"], records,
-                name=row["name"],
-                output=output,
-                weights=w,
-                duration=row["duration"],
-                videos=row["videos"],
-            )
-        except ImportError as e:
-            console.print(f"[red]✗[/] {e}")
-            raise typer.Exit(1)
-
-        if not paths:
-            console.print("[yellow]⚠[/] 没有生成任何图表（数据不足）")
-        else:
-            for p in paths:
-                console.print(f"[green]✓[/] → [bold]{p}[/]")
-    finally:
-        await _cleanup(db, api)
-
-
-# ── daemon status ──────────────────────────────────────────────
-
-
-@app.command()
-def daemon(
-    action: str = typer.Argument(
-        "status", help="status",
-    ),
-):
-    """查看守护进程状态"""
-    if action != "status":
-        console.print("[red]仅支持 daemon status[/]")
-        raise typer.Exit(1)
-    mgr = DaemonManager()
-    pid = mgr.status()
-    if pid:
-        console.print(f"[green]●[/] 守护进程运行中 ([bold]{pid}[/])")
-    else:
-        console.print("[dim]○[/] 守护进程未运行")
 
 
 # ── import ─────────────────────────────────────────────────────
@@ -597,13 +800,22 @@ def import_(
     file: Path = typer.Argument(..., help="导入文件路径 (CSV/JSON)"),
     bvid: str = typer.Option(..., "--bvid", "-b", help="目标视频 BV 号"),
     format: Optional[str] = typer.Option(
-        None, "--format", "-f", help="文件格式 (csv/json，默认从扩展名推断)",
+        None,
+        "--format",
+        "-f",
+        help="文件格式 (csv/json，默认从扩展名推断)",
     ),
     dry_run: bool = typer.Option(
-        False, "--dry-run", "-n", help="仅预览，不写入数据库",
+        False,
+        "--dry-run",
+        "-n",
+        help="仅预览，不写入数据库",
     ),
     overwrite: bool = typer.Option(
-        False, "--overwrite", "-o", help="覆盖已存在的记录",
+        False,
+        "--overwrite",
+        "-o",
+        help="覆盖已存在的记录",
     ),
 ):
     """从文件导入记录数据到视频"""
@@ -611,8 +823,11 @@ def import_(
 
 
 async def _cmd_import(
-    file: Path, bvid: str, format: Optional[str],
-    dry_run: bool, overwrite: bool,
+    file: Path,
+    bvid: str,
+    format: Optional[str],
+    dry_run: bool,
+    overwrite: bool,
 ) -> None:
     if not file.exists():
         console.print(f"[red]✗[/] 文件不存在: [bold]{file}[/]")
@@ -621,9 +836,14 @@ async def _cmd_import(
     db, api = await _init()
     try:
         from bili_monitor.data_import.importer import import_records
+
         result = await import_records(
-            file, bvid, db,
-            format=format, dry_run=dry_run, overwrite=overwrite,
+            file,
+            bvid,
+            db,
+            format=format,
+            dry_run=dry_run,
+            overwrite=overwrite,
         )
         if dry_run:
             console.print(f"[yellow]🔍 预览[/] {result.summary} [dim](未写入)")
