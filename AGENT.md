@@ -229,6 +229,7 @@ $ python -m bili_monitor status
 - **模块单职责**：每个文件不超过 300 行，超限时拆分
 - **无魔法数字**：常量在 `config.py` 或文件顶部定义
 - **import 顺序**：stdlib → third-party → 本地模块
+- **测试临时文件**：统一使用项目内 `test/tmp/` 目录，禁止在系统 `/tmp` 创建测试文件（`tempfile.mktemp`、`NamedTemporaryFile` 等需指定 `dir=test/tmp`）
 
 ## 关键设计决策
 
