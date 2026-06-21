@@ -21,7 +21,7 @@
 | **视频监控** | 给定 BV 号或视频 URL，定时记录播放量、点赞、投币、收藏、弹幕、评论、在线人数、历史最高排名等 |
 | **别名系统** | 每个视频绑定唯一别名，后续全部用别名操作，告别 BV 号 |
 | **灵活间隔** | 60s 起，不设上限（>3600s 时二次确认），默认 15min |
-| **多任务并发** | 最多 5 个任务，所有网络请求串行（绝不并发） |
+| **多任务并发** | 多任务自动串行（绝不并发），任务数 ≥ 3 时 viz 自动启用并行生成 |
 | **记录查看** | `show` 命令终端直接查看最近记录，无需导文件 |
 | **手动记录** | `snap` 命令随时手动记录一次，不等待调度器 |
 | **SQLite 存储** | 零配置，自动建表，WAL 模式 |
@@ -70,7 +70,7 @@ python -m bili_monitor show rick --last 5
 python -m bili_monitor update rick --name rickroll --interval 600
 
 # 列出所有任务
-python -m bili_monitor list
+python -m bili_monitor status
 
 # 停用指定任务（无活跃任务时自动停守护进程）
 python -m bili_monitor stop rickroll
@@ -83,6 +83,9 @@ python -m bili_monitor start
 
 # 导出数据
 python -m bili_monitor export rick --format csv
+
+# 导出所有活跃任务
+python -m bili_monitor export -a
 
 # 导入数据
 python -m bili_monitor import data.csv --bvid BV1GJ411x7h7
@@ -99,8 +102,11 @@ python -m bili_monitor viz rick
 # 自定义权重
 python -m bili_monitor viz rick --weights my_weights.json
 
-# 查看守护进程状态
-python -m bili_monitor daemon status
+# 所有活跃任务可视化（不过滤异常值）
+python -m bili_monitor viz -a --raw
+
+# 查看状态
+python -m bili_monitor status
 ```
 
 ---
@@ -203,7 +209,9 @@ python -m bili_monitor export <BV号> [选项]
 | 参数 | 说明 | 默认 |
 |------|------|------|
 | `-f, --format` | `csv` 或 `json` | csv |
-| `-o, --output` | 输出路径 | 自动生成 |
+| `-o, --output` | 输出路径（仅单任务模式） | 自动生成 |
+| `-a, --all` | 所有活跃任务 | 不设 |
+| `-A, --all-tasks` | 所有任务（含已停止） | 不设 |
 
 导出文件含视频元数据（标题、UP主、别名、发布时间、时长、分区）及 `bvid` 列，可直接用于 `import` 命令。
 
@@ -233,8 +241,12 @@ python -m bili_monitor viz <别名|BV号> [选项]
 
 | 参数 | 说明 | 默认 |
 |------|------|------|
-| `-o, --output` | 自定义输出目录 | `output/image/{bvid}-{name}/{ts}/` |
+| `-o, --output` | 自定义输出目录（仅单任务模式） | `output/image/{bvid}-{name}/{ts}/` |
 | `-w, --weights` | 权重 JSON（局部覆盖） | 内置默认 |
+| `-a, --all` | 所有活跃任务 | 不设 |
+| `-A, --all-tasks` | 所有任务（含已停止） | 不设 |
+| `--raw` | 使用原始数据，不过滤异常 | 过滤异常 |
+| `--parallel/--no-parallel` | 并行生成（默认 ≥3 个任务时自动） | 自动 |
 
 > 一次性生成所有可用图表，数据充足度自动决定哪些图。
 
@@ -280,7 +292,6 @@ export BILI_DATA_DIR=/path/to/data
 |--------|--------|------|
 | 最小间隔 | 60s | — |
 | 默认间隔 | 900s（15 分钟） | 不设上限，>3600s 时二次确认 |
-| 最大任务数 | 5 | — |
 | DB 提醒阈值 | 30MB | 超出提示清理 |
 | 数据保留天数 | 180 天 | 超出提示清理 |
 
@@ -307,7 +318,7 @@ bili_monitor/
 ├── pyproject.toml              # 项目元数据 & 依赖
 ├── src/bili_monitor/
 │   ├── __main__.py             # python -m 入口
-│   ├── cli.py                  # typer 命令定义（12 子命令）
+│   ├── cli.py                  # typer 命令定义（11 子命令）
 │   ├── config.py               # 配置 & 环境变量
 │   ├── api/client.py           # Bilibili API 封装 (Semaphore 串行)
 │   ├── core/scheduler.py       # 异步调度器 & 状态管理

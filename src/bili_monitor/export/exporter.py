@@ -3,12 +3,20 @@ from __future__ import annotations
 import asyncio
 import csv
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
 from bili_monitor.config import Settings
 from bili_monitor.db.database import Database
+
+
+_ILLEGAL = re.compile(r'[/\\:*?"<>|]')
+
+
+def _safe_name(name: str) -> str:
+    return _ILLEGAL.sub("_", name)
 
 META_FIELDS = ["title", "uploader", "name", "pubdate", "duration", "tname"]
 RECORD_FIELDS = [
@@ -17,9 +25,10 @@ RECORD_FIELDS = [
 ]
 
 
-def _auto_path(bvid: str, fmt: str, base_dir: Path) -> Path:
+def _auto_path(bvid: str, name: str, fmt: str, base_dir: Path) -> Path:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return base_dir / f"{bvid}_{ts}.{fmt}"
+    dir_name = f"{bvid}-{_safe_name(name)}" if name else bvid
+    return base_dir / dir_name / f"{ts}.{fmt}"
 
 async def export_records(
     bvid: str,
@@ -30,7 +39,8 @@ async def export_records(
     meta: Optional[dict[str, Any]] = None,
 ) -> Path:
     cfg = Settings.get_instance()
-    out = output or _auto_path(bvid, fmt, cfg.export_dir)
+    name = (meta or {}).get("name", "")
+    out = output or _auto_path(bvid, name, fmt, cfg.export_dir)
     out.parent.mkdir(parents=True, exist_ok=True)
 
     rows = await db.get_records(video_id)

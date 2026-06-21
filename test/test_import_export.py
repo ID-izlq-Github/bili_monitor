@@ -9,10 +9,19 @@ from bili_monitor.data_import.importer import import_records
 from bili_monitor.db.database import Database
 from bili_monitor.db.models import RecordData
 
+TEST_TMP = Path(__file__).parent / "tmp"
+
+
+def _tmp(suffix: str) -> str:
+    """Create a temp file path within the project's test/tmp directory."""
+    fd, path = tempfile.mkstemp(suffix=suffix, dir=str(TEST_TMP))
+    os.close(fd)
+    return path
+
 
 async def _test_roundtrip_csv():
-    db_path = Path(tempfile.mktemp(suffix=".db"))
-    csv_path = Path(tempfile.mktemp(suffix=".csv"))
+    db_path = Path(_tmp(suffix=".db"))
+    csv_path = Path(_tmp(suffix=".csv"))
     try:
         db = Database(db_path)
         await db.connect()
@@ -39,7 +48,7 @@ async def _test_roundtrip_csv():
         assert bvid in content
 
         video_id2 = await db.create_video("BV2xxIMPORT", "import_target", "Target", "Tester")
-        csv_path2 = Path(tempfile.mktemp(suffix=".csv"))
+        csv_path2 = Path(_tmp(suffix=".csv"))
         csv_path2.write_text(
             "bvid,timestamp,views,likes,coins,favorites,danmaku,online,shares,rank\n"
             "BV2xxIMPORT,2026-01-01T12:00:00,100,10,5,20,30,50,2,1\n"
@@ -62,8 +71,8 @@ async def _test_roundtrip_csv():
 
 
 async def _test_roundtrip_json():
-    db_path = Path(tempfile.mktemp(suffix=".db"))
-    json_path = Path(tempfile.mktemp(suffix=".json"))
+    db_path = Path(_tmp(suffix=".db"))
+    json_path = Path(_tmp(suffix=".json"))
     try:
         db = Database(db_path)
         await db.connect()

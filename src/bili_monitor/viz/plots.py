@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -114,10 +115,6 @@ def _fmt_ts(dt: datetime) -> str:
     return dt.strftime("%Y%m%d_%H%M%S")
 
 
-def _build_ts(dt: datetime) -> str:
-    return dt.strftime("%Y%m%d_%H%M%S")
-
-
 def _report_dir(cfg: Settings, bvid: str, name: str, rows) -> Path:
     last = datetime.fromisoformat(rows[-1]["timestamp"])
     d = cfg.image_dir / f"{bvid}-{_safe_name(name)}" / _fmt_ts(last)
@@ -184,7 +181,31 @@ def _deltas(rows):
     return deltas
 
 
-def _clean_rows(rows):
+def _mark_sentinel(rows) -> None:
+    SENTINEL_FIELDS = [
+        "views", "likes", "coins", "favorites", "danmaku",
+        "online", "shares", "rank", "reply", "his_rank",
+    ]
+    for r in rows:
+        for f in SENTINEL_FIELDS:
+            if r.get(f) == -1:
+                r["_stale"] = True
+                break
+
+
+def _flag_outliers(rows) -> None:
+    if len(rows) < 2:
+        return
+    prev = rows[0].get("views")
+    for r in rows[1:]:
+        v = r.get("views")
+        if prev is not None and v is not None and isinstance(prev, (int, float)) and isinstance(v, (int, float)):
+            if prev > 0 and v < prev * 0.9:
+                r["_stale"] = True
+        prev = v if v is not None else prev
+
+
+def _clean_rows(rows, filter_outliers: bool = True):
     numeric = [
         "views",
         "likes",
@@ -225,6 +246,10 @@ def _clean_rows(rows):
             if cleaned[i][f] < cleaned[i - 1][f]:
                 cleaned[i]["_stale"] = True
                 break
+
+    _mark_sentinel(cleaned)
+    if filter_outliers:
+        _flag_outliers(cleaned)
 
     return cleaned
 
@@ -1048,7 +1073,7 @@ _CHART_REGISTRY: list[tuple[str, callable, int, str]] = [  # type: ignore
 ]
 
 
-async def generate_report(
+def _render_report(
     bvid: str,
     rows: list,
     name: str = "",
@@ -1056,6 +1081,8 @@ async def generate_report(
     weights: Optional[dict] = None,
     duration: Optional[int] = None,
     videos: int = 1,
+    filter_outliers: bool = True,
+    show_progress: bool = True,
 ) -> list[Path]:
     if not _HAS_VIZ_DEPS:
         raise ImportError("可视化依赖未安装，请执行: pip install bili-monitor[viz]")
@@ -1064,7 +1091,7 @@ async def generate_report(
     if not rows:
         raise ValueError(f"[{bvid}] 没有记录数据")
 
-    rows = _clean_rows(rows)
+    rows = _clean_rows(rows, filter_outliers=filter_outliers)
     if not rows:
         logger.warning("[%s] 清洗后无有效数据，跳过图表生成", bvid)
         return []
@@ -1088,14 +1115,17 @@ async def generate_report(
     if not usable:
         return generated
 
-    with Progress() as progress:
-        task = progress.add_task(
-            f"生成 {len(usable)} 张图表",
-            total=len(usable),
-        )
+    progress_ctx = Progress() if show_progress else contextlib.nullcontext()
+    with progress_ctx as progress:
+        if show_progress:
+            task = progress.add_task(
+                f"生成 {len(usable)} 张图表",
+                total=len(usable),
+            )
 
         for chart_name, func, min_records, explanation in usable:
-            progress.update(task, description=f"正在生成 {chart_name}...")
+            if show_progress:
+                progress.update(task, description=f"正在生成 {chart_name}...")
 
             fig, ax = plt.subplots(figsize=_FIGSIZE)
             ts_range = f"{timestamps[0].strftime('%m-%d %H:%M')} ~ {timestamps[-1].strftime('%m-%d %H:%M')}  [{len(rows)}条记录]"
@@ -1124,6 +1154,31 @@ async def generate_report(
                 logger.warning("[%s] %s 生成失败: %s", bvid, chart_name, exc)
             finally:
                 plt.close(fig)
-                progress.advance(task)
+                if show_progress:
+                    progress.advance(task)
 
     return generated
+
+
+async def generate_report(
+    bvid: str,
+    rows: list,
+    name: str = "",
+    output: Optional[Path] = None,
+    weights: Optional[dict] = None,
+    duration: Optional[int] = None,
+    videos: int = 1,
+    filter_outliers: bool = True,
+    show_progress: bool = True,
+) -> list[Path]:
+    return _render_report(
+        bvid=bvid,
+        rows=rows,
+        name=name,
+        output=output,
+        weights=weights,
+        duration=duration,
+        videos=videos,
+        filter_outliers=filter_outliers,
+        show_progress=show_progress,
+    )
